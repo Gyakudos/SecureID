@@ -1,0 +1,252 @@
+# SecureID
+
+SecureID is a standalone, local-first vault for passwords, passkeys and
+authenticator codes. It runs on **Windows** and **Android** and stores
+everything in a single encrypted file on the device.
+
+An optional **Supabase account** can sync the already-encrypted vault between
+devices. The master password and every secret stay on the device; the server
+only stores the sealed envelope. Without an account, the app works fully
+offline. If you lose the master password, the only way back in is a backup you
+exported earlier.
+
+## Features
+
+- **Logins** — title, username, password, website, notes and tags, plus an
+  optional **2FA** secret shown inline on the login card.
+- **Passkeys** — relying party, account, credential ID, user handle, COSE
+  public key, algorithm, signature counter, AAGUID and discoverability.
+- **Authenticator** — live 6–8 digit TOTP codes with a countdown ring.
+  - Attach a secret to a login, or add a standalone authenticator entry.
+  - Import `otpauth://totp/...` links by pasting them on any platform.
+  - Scan enrollment QR codes with the Android camera.
+  - SHA-1, SHA-256 and SHA-512, with 30 s or 60 s periods.
+- **Password generator** — length, character classes and ambiguous-character
+  exclusion, with a strength estimate.
+- **Search and filters** — all items, logins, passkeys, 2FA codes and
+  favorites.
+- **Auto-lock** — after inactivity and/or when the app is backgrounded.
+- **Secure clipboard** — copied secrets are cleared after a configurable delay.
+- **Windows Hello** — optional PIN, fingerprint or face unlock on Windows. The
+  master password always remains valid.
+- **Optional account sync** — email/password sign-in with Supabase. Only the
+  encrypted vault envelope is uploaded, with per-user row-level security and
+  revision-based conflict detection.
+- **Linked phone** — move the encrypted vault between Windows and Android over
+  the local network with a one-time QR code. Works fully offline, with no
+  account and no internet connection.
+- **Linked devices** — when signed in, the account screen lists every device
+  that has synced, with its platform and last-seen time.
+- **Encrypted backups** — export and restore the sealed vault file.
+- **Vision accessibility** — larger text (up to 200%), a high-contrast theme,
+  screen-reader labels, and spoken account summaries and details. The controls
+  are available on the setup and unlock screens too, before the vault opens.
+- **FLAG_SECURE on Android** — the vault is hidden from screenshots and the
+  recent-apps thumbnail.
+
+## Vision accessibility
+
+Open **Vision & reading** from the unlock screen, the setup screen, or
+**Settings**. The preferences are stored in `accessibility.json` next to the
+vault, outside the encrypted envelope, so they apply before unlock.
+
+- **Text size** scales the whole app on top of the system text-size setting.
+- **Read accounts aloud** uses the device's installed text-to-speech voice. The
+  speaker button on the vault screen reads every visible account, and each card
+  has its own read button. Passwords and authenticator secrets are never read in
+  a summary; **Read full details aloud** on an item sheet is explicit.
+- **High contrast** switches to a pure-black background with brighter text and
+  borders.
+
+Text-to-speech runs locally through the Windows and Android system voices; no
+account text is sent to a network service.
+
+## Keyboard shortcuts (Windows)
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+N` | Add an item |
+| `Ctrl+F` | Focus search |
+| `Ctrl+L` | Lock the vault |
+
+## Security model
+
+```
+master password ──Argon2id(19 MiB, 2 iterations, random 16-byte salt)──► 256-bit key
+                                                                          │
+vault JSON ──────────────────────────────AES-256-GCM (random 12-byte nonce)┘
+```
+
+- The on-disk envelope contains only the KDF parameters, salt and ciphertext.
+- Every save uses a fresh nonce. The envelope is written atomically with a
+  `.bak` rotation so a crash cannot leave a half-written vault.
+- The vault file lives in the platform application-support folder:
+  - Windows: `%APPDATA%\com.local\secure_id\vault.json`
+  - Android: the app's private support directory.
+- Windows Hello stores the vault key wrapped with a 256-bit device key in
+  Windows' protected credential storage. It never stores the master password.
+- Passkey records hold **public metadata only**. SecureID is not an OS passkey
+  provider; the private key stays in the authenticator that created it.
+- Account sync is zero-knowledge: the server receives the same encrypted
+  envelope that is written to disk, plus a SHA-256 hash and revision number.
+  The master password is never sent to Supabase.
+- Sync uses compare-and-swap on the revision number. If both the local and
+  account vaults changed, the app asks whether to keep this device's version or
+  use the account version instead of silently overwriting either one.
+- Row-level security limits every `vaults` row to its owner (`auth.uid()`).
+- Linked-phone transfer never decrypts the vault. The sending device serves the
+  same encrypted envelope over plain HTTP on the local network, protected by a
+  random single-use token that expires after 10 minutes. The receiving device
+  still needs the master password to open it.
+- The `devices` table stores only a random device id, display name, platform and
+  timestamps. It is a directory, not a key store, and is scoped by row-level
+  security.
+
+## Project layout
+
+```
+lib/
+  config/       build-time Supabase configuration
+  models/       vault items, passkeys, TOTP data, settings
+  security/     Argon2id + AES-GCM, TOTP, password generator, Windows Hello
+  services/     account auth, remote vault storage, LAN pairing, device registry, speech
+  state/        VaultController and the inherited VaultScope
+  storage/      atomic file storage for the vault, sync state, identity, Hello record and accessibility prefs
+  ui/           screens, scanner and shared widgets
+supabase/       SQL schema and setup guide for optional account sync
+test/           crypto, RFC 6238 vectors, models, controller, sync and widget tests
+tools/          icon generation and desktop shortcut scripts
+installer/      NSIS script and build wrapper for the Windows installer
+```
+
+## Building
+
+Flutter 3.47+ with the Windows desktop toolchain or the Android SDK is
+required. The Windows build also needs `nuget.exe` on `PATH` because the
+`flutter_tts` plugin fetches its C++/WinRT dependency through NuGet. This
+repository keeps a copy at `tools\nuget.exe`; the installer wrapper adds it to
+`PATH` automatically.
+
+```powershell
+flutter pub get
+
+# Windows
+flutter build windows --release
+
+# Android (release APK, signed with the debug key by default)
+flutter build apk --release
+```
+
+The Windows executable is written to
+`build\windows\x64\runner\Release\secure_id.exe`.
+
+### Windows installer
+
+The installer is built with [NSIS](https://nsis.sourceforge.io/). Install it
+once, then build the app and the setup executable:
+
+```powershell
+winget install --id NSIS.NSIS -e
+powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1 -BuildFirst
+```
+
+The result is `dist\SecureID-Setup-1.0.0.exe`. It is a per-user installer: it
+does **not** require administrator rights and installs to
+`%LOCALAPPDATA%\Programs\SecureID`. It bundles the Flutter engine and every
+runtime DLL, so the target machine does not need Flutter installed. It creates
+Desktop and Start Menu shortcuts and registers an uninstaller in **Apps &
+Features**. Uninstalling never deletes the encrypted vault in `%APPDATA%`.
+
+To compile account sync into the installed build, pass the public Supabase
+credentials to the same script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1 `
+  -BuildFirst `
+  -SupabaseUrl https://YOUR-PROJECT.supabase.co `
+  -SupabaseKey YOUR-PUBLIC-ANON-OR-PUBLISHABLE-KEY
+```
+
+The installer is unsigned, so Windows SmartScreen may show a warning on other
+machines. Sign it with an Authenticode certificate for public distribution.
+
+### Enabling account sync
+
+Account sync is compiled in only when Supabase credentials are supplied at
+build time. The app remains fully usable offline without them.
+
+```powershell
+flutter build windows --release `
+  --dart-define=SUPABASE_URL=https://YOUR-PROJECT.supabase.co `
+  --dart-define=SUPABASE_ANON_KEY=YOUR-PUBLIC-ANON-OR-PUBLISHABLE-KEY
+```
+
+Use the public anon/publishable key, never the `service_role` key. Create the
+`vaults` table and its row-level security policies with
+[`supabase/schema.sql`](supabase/schema.sql); the full walkthrough is in
+[`supabase/README.md`](supabase/README.md).
+
+### Linking a phone
+
+No account or internet connection is required.
+
+1. On the device that already has the vault, open **Settings → Linked phone →
+   Link a phone → Send from this device**.
+2. On the other device, open **Settings → Linked phone → Link a phone → Receive
+   from a device**, then scan the QR code (Android) or paste the copied link
+   (Windows).
+3. The receiving device downloads the encrypted envelope and asks for the
+   master password to unlock it.
+
+Both devices must be on the same Wi-Fi or LAN. The link is single-use and
+expires after 10 minutes. On Windows, allow the app through the firewall if
+prompted. Receiving a vault replaces any vault already on the receiving device,
+so export a backup first if needed.
+
+### Desktop shortcut
+
+After building, create a shortcut on the current user's desktop:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\create_shortcut.ps1
+```
+
+### Regenerating the icon
+
+The launcher icon is generated from code, so it can be recreated at any time:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\make_icon.ps1
+```
+
+This writes `windows/runner/resources/app_icon.ico` and the Android
+`mipmap-*/ic_launcher.png` files.
+
+## Tests
+
+```powershell
+flutter analyze
+flutter test
+```
+
+The suite covers the Argon2id/AES-GCM envelope, tamper detection, RFC 6238 TOTP
+vectors for all three hash algorithms, `otpauth` parsing, password generation
+and strength, model round-trips, the full controller lifecycle (including
+Windows Hello and backup restore), account sign-in, upload/download sync,
+conflict detection and resolution, accessibility preferences and spoken
+summaries, and the setup/unlock widget flows.
+
+## Limitations
+
+- Windows Hello unlock is Windows-only; Android uses the master password.
+- QR scanning uses `mobile_scanner`, which has no Windows implementation, so
+  desktop users paste `otpauth://` links or type the Base32 secret.
+- SecureID does not register itself as a platform passkey provider. Passkey
+  entries are an encrypted inventory of credential metadata, not a sign-in
+  mechanism.
+- There is no password recovery. Export a backup and keep the master password
+  somewhere safe.
+- Account sync needs a Supabase project and build-time credentials. Whether new
+  accounts must confirm their email depends on the project's email settings.
+- Sync stores the vault as one row. Extremely large vaults should move the
+  encrypted envelope to object storage instead.

@@ -9,3 +9,14 @@ Password manager, and 2fa are to be stored on a separate server with hash level 
 Still very much a work in progress, right now the working app only works locally on windows, and some android I plan to add further support later as I continue to build it. 
 
 This is a side project for me. Vibe coding for both my own use, and my father's use. 
+
+## Download
+
+Prebuilt binaries are attached to the [latest release](https://github.com/Gyakudos/SecureID/releases/latest):
+
+- **Windows** - `SecureID-Setup-1.0.0.exe` (per-user installer, Flutter runtime included, no admin rights needed)
+- **Android** - `SecureID-1.0.0.apk`
+
+## Building from source
+
+See [docs/TECHNICAL.md](docs/TECHNICAL.md) for the architecture, security model and build steps.

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:secure_id/config/app_version.dart';
 import 'package:secure_id/security/vault_crypto.dart';
 import 'package:secure_id/services/update_service.dart';
 import 'package:secure_id/state/vault_controller.dart';
@@ -52,7 +53,7 @@ void main() {
 
     expect(find.text('SecureID 9.9.9 is available'), findsOneWidget);
     expect(
-      find.text('You are on 1.0.0. The newest release is 9.9.9.'),
+      find.text('You are on $appVersion. The newest release is 9.9.9.'),
       findsOneWidget,
     );
     expect(find.text('Release notes for 9.9.9'), findsOneWidget);
@@ -62,7 +63,7 @@ void main() {
   });
 
   testWidgets('reports when the build is current', (tester) async {
-    await pumpApp(tester, FakeUpdateService(release: buildUpdate('1.0.0')));
+    await pumpApp(tester, FakeUpdateService(release: buildUpdate(appVersion)));
 
     await tester.tap(find.text('Check'));
     await tester.pumpAndSettle();

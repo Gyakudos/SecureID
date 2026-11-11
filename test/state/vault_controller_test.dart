@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:secure_id/models/vault_item.dart';
+import 'package:secure_id/security/pin_unlock.dart';
 import 'package:secure_id/security/vault_crypto.dart';
 import 'package:secure_id/state/vault_controller.dart';
 
@@ -127,6 +128,58 @@ void main() {
     expect(controller.pinEnabled, isFalse);
     expect(storage.pin, isNull);
     expect(pin.cleared, isTrue);
+  });
+
+  test('cancelling the unlock prompt keeps the device record', () async {
+    await controller.init();
+    await controller.createVault(password);
+    await controller.enablePinUnlock();
+    controller.lock();
+
+    pin.cancel = true;
+    expect(await controller.unlockWithPin(), isFalse);
+    expect(controller.status, VaultStatus.locked);
+    expect(storage.pin, isNotNull);
+    expect(controller.pinEnabled, isTrue);
+    expect(controller.error, contains('cancelled'));
+
+    pin.cancel = false;
+    expect(await controller.unlockWithPin(), isTrue);
+    expect(controller.status, VaultStatus.unlocked);
+  });
+
+  test('a record the platform can no longer use is discarded', () async {
+    await controller.init();
+    await controller.createVault(password);
+    await controller.enablePinUnlock();
+    controller.lock();
+
+    pin.failure = const PinUnlockException(
+      'Biometrics changed on this phone. Use your master password.',
+    );
+    expect(await controller.unlockWithPin(), isFalse);
+    expect(controller.status, VaultStatus.locked);
+    expect(storage.pin, isNull);
+    expect(controller.pinEnabled, isFalse);
+    expect(controller.error, contains('Biometrics changed'));
+  });
+
+  test('cancelling while enabling does not turn device unlock on', () async {
+    await controller.init();
+    await controller.createVault(password);
+
+    pin.cancel = true;
+    expect(await controller.enablePinUnlock(), isFalse);
+    expect(controller.pinEnabled, isFalse);
+    expect(storage.pin, isNull);
+    expect(controller.error, contains('cancelled'));
+  });
+
+  test('exposes platform unlock wording for the UI', () async {
+    expect(controller.pinFeatureName, 'Windows Hello');
+    expect(controller.pinUnlockButtonLabel, 'Unlock with Windows Hello');
+    expect(controller.pinAvailableHint, isNotEmpty);
+    expect(controller.pinUnavailableHint, isNotEmpty);
   });
 
   test('exports and restores a backup', () async {

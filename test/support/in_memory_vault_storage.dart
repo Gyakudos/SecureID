@@ -4,6 +4,7 @@ import 'package:secure_id/storage/vault_storage.dart';
 class InMemoryVaultStorage implements VaultStorage {
   String? vault;
   String? pin;
+  String? quickUnlock;
 
   @override
   Future<bool> exists() async => vault != null;
@@ -38,5 +39,21 @@ class InMemoryVaultStorage implements VaultStorage {
   @override
   Future<void> deletePin() async {
     pin = null;
+  }
+
+  @override
+  Future<bool> quickUnlockExists() async => quickUnlock != null;
+
+  @override
+  Future<String?> readQuickUnlock() async => quickUnlock;
+
+  @override
+  Future<void> writeQuickUnlock(String contents) async {
+    quickUnlock = contents;
+  }
+
+  @override
+  Future<void> deleteQuickUnlock() async {
+    quickUnlock = null;
   }
 }

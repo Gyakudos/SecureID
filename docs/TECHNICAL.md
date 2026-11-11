@@ -27,8 +27,16 @@ exported earlier.
   favorites.
 - **Auto-lock** — after inactivity and/or when the app is backgrounded.
 - **Secure clipboard** — copied secrets are cleared after a configurable delay.
-- **Windows Hello** — optional PIN, fingerprint or face unlock on Windows. The
-  master password always remains valid.
+- **Device unlock** — optional Windows Hello (PIN, fingerprint or face) on
+  Windows, and biometric unlock on Android. The vault key is wrapped by a
+  device-bound key, and the master password always remains valid.
+- **Default Login** — choose what the lock screen asks for first. On Windows the
+  choices are Password and Windows Hello; on Android they are Password,
+  Biometrics and Password Style. The master password always stays available.
+- **Password Style (Android)** — unlock with a six-digit PIN on a phone-style
+  0-9 pad, or a drawn 3x3 pattern that connects at least four dots. The
+  PIN/pattern wraps the vault key and falls back to the master password after
+  five wrong attempts.
 - **Optional account sync** — email/password sign-in with Supabase. Only the
   encrypted vault envelope is uploaded, with per-user row-level security and
   revision-based conflict detection.
@@ -87,8 +95,19 @@ vault JSON ───────────────────────
 - The vault file lives in the platform application-support folder:
   - Windows: `%APPDATA%\com.local\secure_id\vault.json`
   - Android: the app's private support directory.
-- Windows Hello stores the vault key wrapped with a 256-bit device key in
-  Windows' protected credential storage. It never stores the master password.
+- Device unlock stores the vault key wrapped with a device-bound key: DPAPI on
+  Windows, and an Android Keystore key that can only be used after a biometric
+  prompt on Android. It never stores the master password.
+- PIN/pattern quick unlock derives a wrapping key with Argon2id (64 MiB,
+  3 iterations) and AES-256-GCM, then stores only the wrapped vault key in
+  `vault.quick.json`. Five wrong attempts force the master password. Changing
+  the master password removes the record, because the vault key changes and
+  cannot be rewrapped without the PIN or pattern.
+- The chosen default login lives in `login.json` outside the vault, because the
+  lock screen needs it before the vault is open and it describes this device
+  rather than the synced vault.
+- `vault.pin.json`, `vault.quick.json`, `login.json` and `accessibility.json`
+  sit next to `vault.json` and contain no plaintext secrets.
 - Passkey records hold **public metadata only**. SecureID is not an OS passkey
   provider; the private key stays in the authenticator that created it.
 - Account sync is zero-knowledge: the server receives the same encrypted
@@ -111,11 +130,11 @@ vault JSON ───────────────────────
 ```
 lib/
   config/       build-time Supabase configuration
-  models/       vault items, passkeys, TOTP data, settings
-  security/     Argon2id + AES-GCM, TOTP, password generator, Windows Hello
+  models/       vault items, passkeys, TOTP data, settings, device login
+  security/     Argon2id + AES-GCM, TOTP, password generator, device unlock, quick unlock
   services/     account auth, remote vault storage, LAN pairing, device registry, speech
   state/        VaultController and the inherited VaultScope
-  storage/      atomic file storage for the vault, sync state, identity, Hello record and accessibility prefs
+  storage/      atomic file storage for the vault, sync state, identity, unlock records, login prefs and accessibility prefs
   ui/           screens, scanner and shared widgets
 supabase/       SQL schema and setup guide for optional account sync
 test/           crypto, RFC 6238 vectors, models, controller, sync and widget tests
@@ -236,13 +255,21 @@ flutter test
 The suite covers the Argon2id/AES-GCM envelope, tamper detection, RFC 6238 TOTP
 vectors for all three hash algorithms, `otpauth` parsing, password generation
 and strength, model round-trips, the full controller lifecycle (including
-Windows Hello and backup restore), account sign-in, upload/download sync,
-conflict detection and resolution, accessibility preferences and spoken
-summaries, and the setup/unlock widget flows.
+Windows Hello, Android biometrics, PIN/pattern quick unlock, default login and
+backup restore), account sign-in, upload/download sync, conflict detection and
+resolution, accessibility preferences and spoken summaries, and the
+setup/unlock widget flows.
 
 ## Limitations
 
-- Windows Hello unlock is Windows-only; Android uses the master password.
+- Device unlock needs an enrolled Windows Hello PIN/biometric or an Android
+  fingerprint or face. Android requires a strong (Class 3) biometric for the
+  Keystore key; without one, the master password is used.
+- Enrolling a new fingerprint or face invalidates the Android Keystore key, so
+  biometric unlock must be enabled again with the master password.
+- Password Style quick unlock is Android-only; Windows uses Windows Hello as
+  its non-password option. A six-digit PIN has limited entropy, so the Argon2id
+  cost and five-attempt limit are the protections.
 - QR scanning uses `mobile_scanner`, which has no Windows implementation, so
   desktop users paste `otpauth://` links or type the Base32 secret.
 - SecureID does not register itself as a platform passkey provider. Passkey

@@ -1,7 +1,6 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
+import '../../models/device_login.dart';
 import '../../models/vault_settings.dart';
 import '../../state/vault_controller.dart';
 import '../../state/vault_scope.dart';
@@ -11,6 +10,7 @@ import '../theme.dart';
 import '../widgets/accessibility_panel.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/gradient_background.dart';
+import '../widgets/quick_unlock_setup.dart';
 import '../widgets/secure_clipboard.dart';
 import '../widgets/strength_meter.dart';
 import '../widgets/update_dialog.dart';
@@ -49,7 +49,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (value) {
       final enabled = await controller.enablePinUnlock();
       if (!enabled && mounted) {
-        _snack(controller.error ?? 'Could not enable Windows Hello.');
+        _snack(
+          controller.error ?? 'Could not enable ${controller.pinFeatureName}.',
+        );
       }
     } else {
       await controller.disablePinUnlock();
@@ -66,6 +68,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (changed == true && mounted) {
       _snack('Master password changed.');
     }
+  }
+
+  Future<void> _setDefaultLogin(DefaultLoginMethod method) async {
+    final controller = VaultScope.read(context);
+    if (method == DefaultLoginMethod.passwordStyle &&
+        !controller.quickUnlockEnabled) {
+      await _setupQuickUnlock(controller.passwordStyle);
+      return;
+    }
+    final ok = await controller.setDefaultLogin(method);
+    if (!ok && mounted) {
+      _snack(controller.error ?? 'Could not change the default login.');
+    }
+  }
+
+  Future<void> _setupQuickUnlock(PasswordStyle style) async {
+    final controller = VaultScope.read(context);
+    if (style == PasswordStyle.pin) {
+      final pin = await showPinSetupDialog(context);
+      if (pin == null || !mounted) return;
+      final ok = await controller.enableQuickUnlock(style: style, pin: pin);
+      if (!mounted) return;
+      _snack(
+        ok
+            ? 'PIN set up. It is now the default login.'
+            : controller.error ?? 'Could not set up the PIN.',
+      );
+      return;
+    }
+    final dots = await showPatternSetupDialog(context);
+    if (dots == null || !mounted) return;
+    final ok = await controller.enableQuickUnlock(style: style, pattern: dots);
+    if (!mounted) return;
+    _snack(
+      ok
+          ? 'Pattern set up. It is now the default login.'
+          : controller.error ?? 'Could not set up the pattern.',
+    );
+  }
+
+  Future<void> _changePasswordStyle(PasswordStyle style) async {
+    final controller = VaultScope.read(context);
+    if (style == controller.passwordStyle) return;
+    // With an existing record, ask for the new secret first. Cancelling keeps
+    // the old style and record intact.
+    if (controller.quickUnlockEnabled) {
+      await _setupQuickUnlock(style);
+      return;
+    }
+    await controller.setPasswordStyle(style);
+  }
+
+  Future<void> _removeQuickUnlock() async {
+    final controller = VaultScope.read(context);
+    final confirmed = await confirmAction(
+      context,
+      title: 'Remove quick unlock?',
+      message:
+          'The lock screen will ask for your master password instead. Your '
+          'vault contents are not changed.',
+      confirmLabel: 'Remove',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    await controller.disableQuickUnlock();
+    if (mounted) _snack('Quick unlock removed.');
   }
 
   void _openAccount() {
@@ -374,10 +442,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ),
                             ],
                           ),
-                          if (Platform.isWindows) ...[
+                          if (controller.pinPlatformSupported) ...[
                             const SizedBox(height: 14),
                             _Section(
-                              title: 'Windows Hello',
+                              title: controller.pinFeatureName,
                               icon: Icons.fingerprint_rounded,
                               children: [
                                 SwitchListTile(
@@ -385,17 +453,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   secondary: const Icon(
                                     Icons.fingerprint_rounded,
                                   ),
-                                  title: const Text(
-                                    'Unlock with Windows Hello',
-                                  ),
+                                  title: Text(controller.pinUnlockButtonLabel),
                                   subtitle: Text(
                                     controller.pinAvailable
-                                        ? 'Use your PIN, fingerprint or face to '
-                                              'unwrap the vault key. Your master '
-                                              'password always remains valid.'
-                                        : 'Windows Hello is not set up on this '
-                                              'PC. Add a PIN in Windows Settings '
-                                              'first.',
+                                        ? controller.pinAvailableHint
+                                        : controller.pinUnavailableHint,
                                   ),
                                   value: controller.pinEnabled,
                                   onChanged:
@@ -413,6 +475,170 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               ],
                             ),
                           ],
+                          const SizedBox(height: 14),
+                          _Section(
+                            title: 'Default Login',
+                            icon: Icons.login_rounded,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  top: 4,
+                                  bottom: 6,
+                                ),
+                                child: Text(
+                                  'Choose what the lock screen asks for first. '
+                                  'Your master password always works.',
+                                  style: TextStyle(
+                                    color: scheme.onSurfaceVariant,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                              _LoginMethodTile(
+                                icon: Icons.password_rounded,
+                                title: 'Password',
+                                subtitle: 'Type your master password',
+                                selected:
+                                    controller.defaultLogin ==
+                                    DefaultLoginMethod.password,
+                                onTap: () => _setDefaultLogin(
+                                  DefaultLoginMethod.password,
+                                ),
+                              ),
+                              if (controller.pinPlatformSupported)
+                                _LoginMethodTile(
+                                  icon: Icons.fingerprint_rounded,
+                                  title: controller.pinFeatureName,
+                                  subtitle: controller.pinEnabled
+                                      ? 'Use your enrolled biometric or PIN'
+                                      : 'Enable ${controller.pinFeatureName} '
+                                            'above first',
+                                  selected:
+                                      controller.defaultLogin ==
+                                      DefaultLoginMethod.deviceUnlock,
+                                  onTap: () => _setDefaultLogin(
+                                    DefaultLoginMethod.deviceUnlock,
+                                  ),
+                                ),
+                              if (controller.passwordStyleSupported) ...[
+                                _LoginMethodTile(
+                                  icon: Icons.dialpad_rounded,
+                                  title: 'Password Style',
+                                  subtitle: controller.quickUnlockEnabled
+                                      ? (controller.passwordStyle ==
+                                                PasswordStyle.pin
+                                            ? 'Unlock with your six-digit PIN'
+                                            : 'Unlock with your drawn pattern')
+                                      : 'Set up a PIN or a drawn pattern',
+                                  selected:
+                                      controller.defaultLogin ==
+                                      DefaultLoginMethod.passwordStyle,
+                                  onTap: () => _setDefaultLogin(
+                                    DefaultLoginMethod.passwordStyle,
+                                  ),
+                                ),
+                                const Divider(height: 1),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Text(
+                                        'Password style',
+                                        style: TextStyle(
+                                          color: scheme.onSurfaceVariant,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      SegmentedButton<PasswordStyle>(
+                                        segments: const [
+                                          ButtonSegment(
+                                            value: PasswordStyle.pin,
+                                            icon: Icon(
+                                              Icons.dialpad_rounded,
+                                              size: 18,
+                                            ),
+                                            label: Text('6-digit PIN'),
+                                          ),
+                                          ButtonSegment(
+                                            value: PasswordStyle.pattern,
+                                            icon: Icon(
+                                              Icons.gesture_rounded,
+                                              size: 18,
+                                            ),
+                                            label: Text('Pattern'),
+                                          ),
+                                        ],
+                                        selected: {controller.passwordStyle},
+                                        onSelectionChanged: (selection) =>
+                                            _changePasswordStyle(
+                                              selection.first,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: FilledButton.tonalIcon(
+                                              onPressed: () =>
+                                                  _setupQuickUnlock(
+                                                    controller.passwordStyle,
+                                                  ),
+                                              icon: Icon(
+                                                controller.quickUnlockEnabled
+                                                    ? Icons.autorenew_rounded
+                                                    : Icons.add_rounded,
+                                              ),
+                                              label: Text(
+                                                controller.quickUnlockEnabled
+                                                    ? 'Change ${controller.passwordStyle == PasswordStyle.pin ? 'PIN' : 'pattern'}'
+                                                    : 'Set up ${controller.passwordStyle == PasswordStyle.pin ? 'PIN' : 'pattern'}',
+                                              ),
+                                            ),
+                                          ),
+                                          if (controller
+                                              .quickUnlockEnabled) ...[
+                                            const SizedBox(width: 8),
+                                            IconButton(
+                                              tooltip: 'Remove quick unlock',
+                                              onPressed: _removeQuickUnlock,
+                                              icon: const Icon(
+                                                Icons.delete_outline_rounded,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                      if (controller.quickUnlockEnabled) ...[
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          controller.quickUnlockLockedOut
+                                              ? 'Too many attempts. Unlock '
+                                                    'with your master password.'
+                                              : '${controller.quickUnlockAttemptsRemaining} '
+                                                    'attempt${controller.quickUnlockAttemptsRemaining == 1 ? '' : 's'} '
+                                                    'left before the master '
+                                                    'password is required.',
+                                          style: TextStyle(
+                                            color:
+                                                controller.quickUnlockLockedOut
+                                                ? scheme.error
+                                                : scheme.onSurfaceVariant,
+                                            fontSize: 11.5,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                           const SizedBox(height: 14),
                           _Section(
                             title: 'Password generator defaults',
@@ -844,6 +1070,43 @@ class _DropdownTile<T> extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _LoginMethodTile extends StatelessWidget {
+  const _LoginMethodTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        icon,
+        color: selected ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: Icon(
+        selected
+            ? Icons.radio_button_checked_rounded
+            : Icons.radio_button_unchecked_rounded,
+        color: selected ? scheme.primary : scheme.outline,
+      ),
+      onTap: onTap,
     );
   }
 }

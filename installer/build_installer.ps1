@@ -56,16 +56,23 @@ if (-not (Test-Path (Join-Path $release 'secure_id.exe'))) {
 
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
+# Read the version from pubspec.yaml so the installer, the APK and the in-app
+# version badge never drift apart.
+$pubspec = Get-Content (Join-Path $root 'pubspec.yaml') -Raw
+$versionMatch = [regex]::Match($pubspec, '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)')
+if (-not $versionMatch.Success) { throw 'Could not read version from pubspec.yaml.' }
+$version = $versionMatch.Groups[1].Value
+
 Push-Location $root
 try {
-  & $makensis /V2 $script
+  & $makensis /V2 "/DPRODUCT_VERSION=$version" $script
   if ($LASTEXITCODE -ne 0) { throw 'makensis failed.' }
 }
 finally {
   Pop-Location
 }
 
-$out = Join-Path $dist 'SecureID-Setup-1.0.0.exe'
+$out = Join-Path $dist "SecureID-Setup-$version.exe"
 if (-not (Test-Path $out)) { throw "Installer was not created at $out." }
 $size = [math]::Round((Get-Item $out).Length / 1MB, 2)
 Write-Host ''

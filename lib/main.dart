@@ -11,6 +11,7 @@ import 'services/update_service.dart';
 import 'state/vault_controller.dart';
 import 'storage/accessibility_store.dart';
 import 'storage/device_identity.dart';
+import 'storage/device_login_store.dart';
 import 'storage/file_vault_storage.dart';
 import 'storage/sync_state_store.dart';
 
@@ -48,6 +49,7 @@ Future<void> main() async {
     deviceRegistry: deviceRegistry,
     deviceIdentityStore: DeviceIdentityStore(),
     accessibilityStore: FileAccessibilityStore(),
+    deviceLoginStore: FileDeviceLoginStore(),
     speechService: FlutterTtsSpeechService(),
     updateService: GitHubUpdateService(),
   );

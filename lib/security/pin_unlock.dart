@@ -10,8 +10,8 @@ import 'device_key_store.dart';
 import 'vault_crypto.dart';
 import 'windows_dpapi.dart';
 
-/// The Windows Hello record: the vault key wrapped with a device key that is
-/// stored in a DPAPI-sealed file.
+/// The device unlock record: the vault key wrapped with a key that only this
+/// device can use (DPAPI on Windows, the Android Keystore on Android).
 class PinVaultRecord {
   const PinVaultRecord({required this.vaultId, required this.wrappedKey});
 
@@ -33,31 +33,74 @@ class PinVaultRecord {
     if (decoded is! Map<String, dynamic> ||
         decoded['format'] != 'secureid-pin' ||
         decoded['version'] != 1) {
-      throw const FormatException('Not a SecureID Windows Hello record.');
+      throw const FormatException('Not a SecureID device unlock record.');
     }
     final vaultId = decoded['vaultId'] as String? ?? '';
     final wrappedKey = base64Decode(decoded['wrappedKey'] as String? ?? '');
     if (vaultId.isEmpty ||
         wrappedKey.length < VaultCrypto.nonceLength + VaultCrypto.macLength) {
-      throw const FormatException('The Windows Hello record is incomplete.');
+      throw const FormatException('The device unlock record is incomplete.');
     }
     return PinVaultRecord(vaultId: vaultId, wrappedKey: wrappedKey);
   }
 }
 
-/// The platform-specific Windows Hello / PIN integration.
+/// Thrown when the user dismisses the platform unlock prompt.
+class PinUnlockCancelled implements Exception {
+  const PinUnlockCancelled();
+}
+
+/// Thrown when device unlock cannot finish. [message] is safe to show to the
+/// user.
+class PinUnlockException implements Exception {
+  const PinUnlockException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Platform-specific unlock with a fingerprint, face, Windows Hello PIN or
+/// Android biometric.
+///
+/// Implementations prompt the user themselves, so the caller never has to know
+/// whether the prompt is bound to a Windows DPAPI key or an Android Keystore
+/// operation.
 abstract class PinUnlock {
   bool get isPlatformSupported;
+
+  /// The name of the feature on this platform, for headings and messages.
+  String get featureName;
+
+  /// The label for the unlock button, e.g. "Unlock with Windows Hello".
+  String get unlockButtonLabel;
+
+  /// Help text shown when the feature is enabled.
+  String get availableHint;
+
+  /// Help text shown when the platform has no enrolled biometric or PIN.
+  String get unavailableHint;
+
   Future<bool> isAvailable();
-  Future<bool> authenticate();
+
+  /// Prompts the user, then wraps the vault key for this device.
   Future<PinVaultRecord> wrapVaultKey({
     required List<int> vaultKey,
     required List<int> salt,
   });
+
+  /// Prompts the user, then unwraps the vault key.
   Future<List<int>> unwrapVaultKey(PinVaultRecord record);
+
   Future<void> clearDeviceKey();
 }
 
+/// Windows Hello / PIN unlock.
+///
+/// The vault key is sealed with a random 256-bit device key, and that device
+/// key is kept in a DPAPI-sealed file that only the current Windows user can
+/// open.
 class PinUnlockService implements PinUnlock {
   PinUnlockService({LocalAuthentication? auth, DeviceKeyStore? deviceKeyStore})
     : _auth = auth ?? LocalAuthentication(),
@@ -73,6 +116,22 @@ class PinUnlockService implements PinUnlock {
   bool get isPlatformSupported => Platform.isWindows;
 
   @override
+  String get featureName => 'Windows Hello';
+
+  @override
+  String get unlockButtonLabel => 'Unlock with Windows Hello';
+
+  @override
+  String get availableHint =>
+      'Use your PIN, fingerprint or face to unwrap the vault key. Your master '
+      'password always remains valid.';
+
+  @override
+  String get unavailableHint =>
+      'Windows Hello is not set up on this PC. Add a PIN in Windows Settings '
+      'first.';
+
+  @override
   Future<bool> isAvailable() async {
     if (!isPlatformSupported) return false;
     try {
@@ -82,9 +141,17 @@ class PinUnlockService implements PinUnlock {
     }
   }
 
-  @override
-  Future<bool> authenticate() async {
-    if (!isPlatformSupported) return false;
+  Future<void> _authenticateOrThrow() async {
+    if (!isPlatformSupported) {
+      throw const PinUnlockException(
+        'Windows Hello unlock is only available on Windows.',
+      );
+    }
+    final authenticated = await _authenticate();
+    if (!authenticated) throw const PinUnlockCancelled();
+  }
+
+  Future<bool> _authenticate() async {
     try {
       return await _auth.authenticate(
         localizedReason: 'Unlock SecureID',
@@ -132,6 +199,7 @@ class PinUnlockService implements PinUnlock {
     required List<int> vaultKey,
     required List<int> salt,
   }) async {
+    await _authenticateOrThrow();
     final deviceKey = await _ensureDeviceKey();
     final box = await _cipher.encrypt(
       vaultKey,
@@ -146,6 +214,7 @@ class PinUnlockService implements PinUnlock {
 
   @override
   Future<List<int>> unwrapVaultKey(PinVaultRecord record) async {
+    await _authenticateOrThrow();
     final deviceKey = await _readDeviceKey();
     if (deviceKey == null) {
       throw const FormatException(

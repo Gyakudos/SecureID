@@ -14,10 +14,12 @@ class FileVaultStorage implements VaultStorage {
   FileVaultStorage({
     this.fileName = 'vault.json',
     this.pinFileName = 'vault.pin.json',
+    this.quickUnlockFileName = 'vault.quick.json',
   });
 
   final String fileName;
   final String pinFileName;
+  final String quickUnlockFileName;
 
   Future<Directory> _directory() async {
     final base = await getApplicationSupportDirectory();
@@ -30,6 +32,9 @@ class FileVaultStorage implements VaultStorage {
 
   Future<File> _pinFile() async =>
       File(p.join((await _directory()).path, pinFileName));
+
+  Future<File> _quickUnlockFile() async =>
+      File(p.join((await _directory()).path, quickUnlockFileName));
 
   @override
   Future<bool> exists() async => (await _file()).exists();
@@ -109,6 +114,34 @@ class FileVaultStorage implements VaultStorage {
   @override
   Future<void> deletePin() async {
     final file = await _pinFile();
+    for (final target in [file, File('${file.path}.tmp')]) {
+      if (await target.exists()) await target.delete();
+    }
+  }
+
+  @override
+  Future<bool> quickUnlockExists() async => (await _quickUnlockFile()).exists();
+
+  @override
+  Future<String?> readQuickUnlock() async {
+    final file = await _quickUnlockFile();
+    if (!await file.exists()) return null;
+    return file.readAsString();
+  }
+
+  @override
+  Future<void> writeQuickUnlock(String contents) async {
+    final file = await _quickUnlockFile();
+    await file.parent.create(recursive: true);
+    final temp = File('${file.path}.tmp');
+    await temp.writeAsString(contents, flush: true);
+    if (await file.exists()) await file.delete();
+    await temp.rename(file.path);
+  }
+
+  @override
+  Future<void> deleteQuickUnlock() async {
+    final file = await _quickUnlockFile();
     for (final target in [file, File('${file.path}.tmp')]) {
       if (await target.exists()) await target.delete();
     }

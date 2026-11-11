@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -9,10 +10,13 @@ import 'package:flutter/widgets.dart';
 import '../config/app_version.dart';
 import '../models/accessibility_settings.dart';
 import '../models/app_update.dart';
+import '../models/device_login.dart';
 import '../models/vault_data.dart';
 import '../models/vault_item.dart';
 import '../models/vault_settings.dart';
+import '../security/device_unlock.dart';
 import '../security/pin_unlock.dart';
+import '../security/quick_unlock.dart';
 import '../security/vault_crypto.dart';
 import '../services/account_session.dart';
 import '../services/device_registry.dart';
@@ -21,6 +25,7 @@ import '../services/speech_service.dart';
 import '../services/update_service.dart';
 import '../storage/accessibility_store.dart';
 import '../storage/device_identity.dart';
+import '../storage/device_login_store.dart';
 import '../storage/sync_state_store.dart';
 import '../storage/vault_storage.dart';
 import '../util/version.dart';
@@ -65,11 +70,13 @@ class VaultController extends ChangeNotifier {
     DeviceRegistry? deviceRegistry,
     DeviceIdentityStore? deviceIdentityStore,
     AccessibilityStore? accessibilityStore,
+    DeviceLoginStore? deviceLoginStore,
     SpeechService? speechService,
     UpdateService? updateService,
+    QuickUnlockConfig quickUnlockConfig = const QuickUnlockConfig(),
     Duration syncDebounce = const Duration(seconds: 2),
   }) : _storage = storage, // ignore: prefer_initializing_formals
-       _pin = pinUnlock ?? PinUnlockService(),
+       _pin = pinUnlock ?? createDeviceUnlock(),
        // ignore: prefer_initializing_formals
        _kdf = kdf,
        _now = now ?? DateTime.now,
@@ -86,9 +93,13 @@ class VaultController extends ChangeNotifier {
        // ignore: prefer_initializing_formals
        _accessibilityStore = accessibilityStore,
        // ignore: prefer_initializing_formals
+       _deviceLoginStore = deviceLoginStore,
+       // ignore: prefer_initializing_formals
        _speech = speechService,
        // ignore: prefer_initializing_formals
        _updates = updateService,
+       // ignore: prefer_initializing_formals
+       _quickConfig = quickUnlockConfig,
        // ignore: prefer_initializing_formals
        _syncDebounce = syncDebounce;
 
@@ -104,8 +115,10 @@ class VaultController extends ChangeNotifier {
   final DeviceRegistry? _deviceRegistry;
   final DeviceIdentityStore? _deviceIdentityStore;
   final AccessibilityStore? _accessibilityStore;
+  final DeviceLoginStore? _deviceLoginStore;
   final SpeechService? _speech;
   final UpdateService? _updates;
+  final QuickUnlockConfig _quickConfig;
   final Duration _syncDebounce;
 
   VaultStatus _status = VaultStatus.initializing;
@@ -142,6 +155,9 @@ class VaultController extends ChangeNotifier {
   bool _speaking = false;
   int _speechGeneration = 0;
 
+  DeviceLoginSettings _deviceLogin = const DeviceLoginSettings();
+  QuickUnlockRecord? _quickRecord;
+
   UpdateStatus _updateStatus = UpdateStatus.idle;
   AppUpdate? _latestUpdate;
   String? _updateError;
@@ -161,6 +177,60 @@ class VaultController extends ChangeNotifier {
   bool get pinAvailable => _pinAvailable;
   bool get pinEnabled => _pinEnabled && _pinAvailable;
   bool get pinPlatformSupported => _pin.isPlatformSupported;
+
+  /// The platform name for device unlock, e.g. "Windows Hello".
+  String get pinFeatureName => _pin.featureName;
+
+  /// The unlock button label for this platform.
+  String get pinUnlockButtonLabel => _pin.unlockButtonLabel;
+
+  /// Help text shown when device unlock is enabled.
+  String get pinAvailableHint => _pin.availableHint;
+
+  /// Help text shown when the platform has nothing enrolled yet.
+  String get pinUnavailableHint => _pin.unavailableHint;
+
+  /// The default login method chosen for this device.
+  DefaultLoginMethod get defaultLogin => _deviceLogin.method;
+
+  /// The PIN or pattern style chosen for quick unlock.
+  PasswordStyle get passwordStyle => _deviceLogin.style;
+
+  /// True when this platform can offer a PIN or pattern quick unlock.
+  bool get passwordStyleSupported => Platform.isAndroid;
+
+  /// True when a PIN or pattern has been set up on this device.
+  bool get quickUnlockEnabled => _quickRecord != null;
+
+  /// True when quick unlock has used every attempt and the master password is
+  /// required.
+  bool get quickUnlockLockedOut =>
+      (_quickRecord?.failedAttempts ?? 0) >= QuickUnlockCrypto.maxAttempts;
+
+  /// How many quick-unlock attempts remain before the master password is
+  /// required.
+  int get quickUnlockAttemptsRemaining {
+    final left =
+        QuickUnlockCrypto.maxAttempts - (_quickRecord?.failedAttempts ?? 0);
+    return left < 0 ? 0 : left;
+  }
+
+  /// The method the lock screen should actually present. A method that is not
+  /// ready on this device falls back to the master password.
+  DefaultLoginMethod get effectiveDefaultLogin {
+    switch (_deviceLogin.method) {
+      case DefaultLoginMethod.password:
+        return DefaultLoginMethod.password;
+      case DefaultLoginMethod.deviceUnlock:
+        return pinEnabled
+            ? DefaultLoginMethod.deviceUnlock
+            : DefaultLoginMethod.password;
+      case DefaultLoginMethod.passwordStyle:
+        return quickUnlockEnabled && !quickUnlockLockedOut
+            ? DefaultLoginMethod.passwordStyle
+            : DefaultLoginMethod.password;
+    }
+  }
 
   bool get accountAvailable =>
       _account != null &&
@@ -219,6 +289,7 @@ class VaultController extends ChangeNotifier {
 
   Future<void> init() async {
     await _loadAccessibility();
+    await _loadDeviceLogin();
     try {
       final exists = await _storage.exists();
       if (exists) {
@@ -247,6 +318,40 @@ class VaultController extends ChangeNotifier {
       if (saved != null) _accessibility = saved;
     } catch (_) {
       // A damaged preferences file falls back to the accessible defaults.
+    }
+  }
+
+  /// Loads the device-local login choice and any PIN/pattern record.
+  Future<void> _loadDeviceLogin() async {
+    final store = _deviceLoginStore;
+    if (store != null) {
+      try {
+        final saved = await store.read();
+        if (saved != null) _deviceLogin = saved;
+      } catch (_) {
+        // A damaged preferences file falls back to the master password.
+      }
+    }
+    try {
+      final text = await _storage.readQuickUnlock();
+      if (text == null) {
+        _quickRecord = null;
+        return;
+      }
+      final record = QuickUnlockRecord.decode(text);
+      final vaultText = await _storage.read();
+      final envelope = vaultText == null
+          ? null
+          : VaultEnvelope.decode(vaultText);
+      if (envelope == null || record.vaultId != base64Encode(envelope.salt)) {
+        // The record belongs to a vault that is no longer here.
+        _quickRecord = null;
+        await _storage.deleteQuickUnlock();
+        return;
+      }
+      _quickRecord = record;
+    } catch (_) {
+      _quickRecord = null;
     }
   }
 
@@ -737,8 +842,10 @@ class VaultController extends ChangeNotifier {
         await _storage.deletePin();
         await _pin.clearDeviceKey();
       } catch (_) {
-        // A stale Windows Hello record is rejected on the next unlock.
+        // A stale device unlock record is rejected on the next unlock.
       }
+      await _clearQuickUnlockRecord();
+      await _resetDefaultLoginIfQuick();
 
       _syncState = null;
       _conflict = null;
@@ -930,8 +1037,10 @@ class VaultController extends ChangeNotifier {
         await _storage.deletePin();
         await _pin.clearDeviceKey();
       } catch (_) {
-        // A stale Windows Hello record is rejected on the next unlock.
+        // A stale device unlock record is rejected on the next unlock.
       }
+      await _clearQuickUnlockRecord();
+      await _resetDefaultLoginIfQuick();
     }
 
     if (_status == VaultStatus.unlocked && sameVault && key != null) {
@@ -1066,6 +1175,8 @@ class VaultController extends ChangeNotifier {
       _keyBytes = Uint8List.fromList(await sealed.key.extractBytes());
       _status = VaultStatus.unlocked;
       _pinEnabled = false;
+      await _clearQuickUnlockRecord();
+      await _resetDefaultLoginIfQuick();
       _lastActivity = _now();
       _lastSavedAt = _now();
       _scheduleAutoLock();
@@ -1139,9 +1250,9 @@ class VaultController extends ChangeNotifier {
     }
   }
 
-  /// Windows Hello is device-specific, so the PIN record file is the source of
-  /// truth rather than the synced vault settings. A record is only kept when
-  /// Windows Hello is available on this PC.
+  /// Device unlock is device-specific, so the unlock record file is the source
+  /// of truth rather than the synced vault settings. A record is only kept when
+  /// the platform unlock is available on this device.
   Future<void> _reconcilePinAfterPasswordUnlock() async {
     try {
       final pinFileExists = await _storage.pinExists();
@@ -1156,24 +1267,52 @@ class VaultController extends ChangeNotifier {
     }
   }
 
-  /// Prompts for Windows Hello (PIN, fingerprint or face) and unlocks with the
-  /// device-wrapped vault key.
+  /// Opens the vault with an already-unwrapped vault key.
+  ///
+  /// Shared by the device-unlock and PIN/pattern paths so every route applies
+  /// the same validation and post-unlock state.
+  Future<bool> _openWithVaultKey(List<int> keyBytes) async {
+    final vaultText = await _storage.read();
+    if (vaultText == null) {
+      throw const FormatException('The vault file is missing.');
+    }
+    if (keyBytes.length != VaultCrypto.keyLength) {
+      throw const FormatException('The vault key is invalid.');
+    }
+    final envelope = VaultEnvelope.decode(vaultText);
+    final key = SecretKey(keyBytes);
+    final plaintext = await VaultCrypto.decrypt(key, envelope.payload);
+    final decoded = jsonDecode(plaintext);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('The vault contents are not valid.');
+    }
+    final data = VaultData.fromJson(decoded);
+    _data = data;
+    _envelope = envelope;
+    _key = key;
+    _keyBytes = Uint8List.fromList(keyBytes);
+    _status = VaultStatus.unlocked;
+    _lastActivity = _now();
+    _lastSavedAt = _now();
+    _scheduleAutoLock();
+    return true;
+  }
+
+  /// Prompts for the platform unlock (Windows Hello or Android biometrics) and
+  /// unlocks with the device-wrapped vault key.
   Future<bool> unlockWithPin() async {
     if (_busy || !_pinAvailable) return false;
     _busy = true;
     _error = null;
     _safeNotify();
     try {
-      final authenticated = await _pin.authenticate();
-      if (!authenticated) {
-        _fail('Windows Hello was cancelled.');
-        return false;
-      }
       final pinText = await _storage.readPin();
       final vaultText = await _storage.read();
       if (pinText == null || vaultText == null) {
         await _discardPinRecord();
-        _fail('The Windows Hello record is missing. Use your master password.');
+        _fail(
+          'The ${_pin.featureName} record is missing. Use your master password.',
+        );
         return false;
       }
       final envelope = VaultEnvelope.decode(vaultText);
@@ -1181,44 +1320,36 @@ class VaultController extends ChangeNotifier {
       if (record.vaultId != base64Encode(envelope.salt)) {
         await _discardPinRecord();
         _fail(
-          'This Windows Hello record belongs to a different vault. '
+          'This ${_pin.featureName} record belongs to a different vault. '
           'Use your master password.',
         );
         return false;
       }
       final keyBytes = await _pin.unwrapVaultKey(record);
-      if (keyBytes.length != VaultCrypto.keyLength) {
-        throw const FormatException('The Windows Hello key is invalid.');
+      final opened = await _openWithVaultKey(keyBytes);
+      if (opened) {
+        _pinEnabled = true;
+        _data!.settings.pinUnlockEnabled = true;
       }
-      final key = SecretKey(keyBytes);
-      final plaintext = await VaultCrypto.decrypt(key, envelope.payload);
-      final decoded = jsonDecode(plaintext);
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException('The vault contents are not valid.');
-      }
-      final data = VaultData.fromJson(decoded);
-      _data = data;
-      _envelope = envelope;
-      _key = key;
-      _keyBytes = Uint8List.fromList(keyBytes);
-      _status = VaultStatus.unlocked;
-      _pinEnabled = true;
-      data.settings.pinUnlockEnabled = true;
-      _lastActivity = _now();
-      _lastSavedAt = _now();
-      _scheduleAutoLock();
-      return true;
+      return opened;
+    } on PinUnlockCancelled {
+      _fail('${_pin.featureName} was cancelled.');
+      return false;
+    } on PinUnlockException catch (exception) {
+      await _discardPinRecord();
+      _fail(exception.message);
+      return false;
     } on SecretBoxAuthenticationError {
       await _discardPinRecord();
-      _fail('Windows Hello unlock failed. Use your master password.');
+      _fail('${_pin.featureName} unlock failed. Use your master password.');
       return false;
     } on FormatException {
       await _discardPinRecord();
-      _fail('Windows Hello unlock failed. Use your master password.');
+      _fail('${_pin.featureName} unlock failed. Use your master password.');
       return false;
     } catch (_) {
       await _discardPinRecord();
-      _fail('Windows Hello unlock failed. Use your master password.');
+      _fail('${_pin.featureName} unlock failed. Use your master password.');
       return false;
     } finally {
       _busy = false;
@@ -1226,7 +1357,7 @@ class VaultController extends ChangeNotifier {
     }
   }
 
-  /// Removes a Windows Hello record that can no longer unwrap the current
+  /// Removes a device unlock record that can no longer unwrap the current
   /// vault (wrong vault, missing device key or failed decryption).
   Future<void> _discardPinRecord() async {
     _pinEnabled = false;
@@ -1246,7 +1377,7 @@ class VaultController extends ChangeNotifier {
       return false;
     }
     if (!_pin.isPlatformSupported) {
-      _fail('Windows Hello unlock is only available on Windows.');
+      _fail('${_pin.featureName} is not available on this platform.');
       return false;
     }
     _busy = true;
@@ -1254,11 +1385,7 @@ class VaultController extends ChangeNotifier {
     _safeNotify();
     try {
       if (!await _pin.isAvailable()) {
-        _fail('Windows Hello is not set up on this PC.');
-        return false;
-      }
-      if (!await _pin.authenticate()) {
-        _fail('Windows Hello was cancelled.');
+        _fail(_pin.unavailableHint);
         return false;
       }
       final record = await _pin.wrapVaultKey(
@@ -1271,8 +1398,14 @@ class VaultController extends ChangeNotifier {
       _data!.settings.pinUnlockEnabled = true;
       await save();
       return true;
+    } on PinUnlockCancelled {
+      _fail('${_pin.featureName} was cancelled.');
+      return false;
+    } on PinUnlockException catch (exception) {
+      _fail(exception.message);
+      return false;
     } catch (exception) {
-      _fail('Could not enable Windows Hello: $exception');
+      _fail('Could not enable ${_pin.featureName}: $exception');
       return false;
     } finally {
       _busy = false;
@@ -1293,6 +1426,200 @@ class VaultController extends ChangeNotifier {
       await save();
     }
     _safeNotify();
+  }
+
+  /// Chooses which unlock method the lock screen presents first.
+  Future<bool> setDefaultLogin(DefaultLoginMethod method) async {
+    if (method == DefaultLoginMethod.deviceUnlock && !pinEnabled) {
+      final enabled = await enablePinUnlock();
+      if (!enabled) return false;
+    }
+    if (method == DefaultLoginMethod.passwordStyle && !quickUnlockEnabled) {
+      _fail('Set up a PIN or pattern first.');
+      return false;
+    }
+    _deviceLogin = _deviceLogin.copyWith(method: method);
+    await _persistDeviceLogin();
+    _safeNotify();
+    return true;
+  }
+
+  /// Chooses the PIN or pattern style used by quick unlock.
+  ///
+  /// An existing record is tied to the old style, so it is removed and the
+  /// caller is expected to set up the new one.
+  Future<void> setPasswordStyle(PasswordStyle style) async {
+    if (_deviceLogin.style == style) return;
+    _deviceLogin = _deviceLogin.copyWith(style: style);
+    if (_quickRecord != null) await _clearQuickUnlockRecord();
+    await _persistDeviceLogin();
+    _safeNotify();
+  }
+
+  /// Creates a PIN or pattern that wraps the current vault key.
+  ///
+  /// [pin] must be six digits for [PasswordStyle.pin]; [pattern] is the ordered
+  /// list of 0-8 dot indexes for [PasswordStyle.pattern].
+  Future<bool> enableQuickUnlock({
+    required PasswordStyle style,
+    String? pin,
+    List<int>? pattern,
+  }) async {
+    if (_status != VaultStatus.unlocked ||
+        _keyBytes == null ||
+        _envelope == null) {
+      return false;
+    }
+    final String secret;
+    if (style == PasswordStyle.pin) {
+      final value = pin ?? '';
+      if (!QuickUnlockCrypto.isValidPin(value)) {
+        _fail('Use a six-digit PIN.');
+        return false;
+      }
+      secret = value;
+    } else {
+      final dots = pattern ?? const <int>[];
+      if (!QuickUnlockCrypto.isValidPattern(dots)) {
+        _fail('Draw a pattern that uses at least four dots.');
+        return false;
+      }
+      secret = QuickUnlockCrypto.patternSecret(dots);
+    }
+    _busy = true;
+    _error = null;
+    _safeNotify();
+    try {
+      final record = await QuickUnlockCrypto.create(
+        vaultKey: _keyBytes!,
+        vaultSalt: _envelope!.salt,
+        style: style,
+        secret: secret,
+        config: _quickConfig,
+      );
+      await _storage.writeQuickUnlock(record.encode());
+      _quickRecord = record;
+      _deviceLogin = DeviceLoginSettings(
+        method: DefaultLoginMethod.passwordStyle,
+        style: style,
+      );
+      await _persistDeviceLogin();
+      return true;
+    } catch (exception) {
+      _fail('Could not set up quick unlock: $exception');
+      return false;
+    } finally {
+      _busy = false;
+      _safeNotify();
+    }
+  }
+
+  /// Removes the PIN/pattern record and falls back to the master password.
+  Future<void> disableQuickUnlock() async {
+    await _clearQuickUnlockRecord();
+    if (_deviceLogin.method == DefaultLoginMethod.passwordStyle) {
+      _deviceLogin = _deviceLogin.copyWith(method: DefaultLoginMethod.password);
+      await _persistDeviceLogin();
+    }
+    _safeNotify();
+  }
+
+  /// Unlocks with the PIN or pattern set up on this device.
+  Future<bool> unlockWithQuick(String secret) async {
+    if (_busy) return false;
+    final record = _quickRecord;
+    if (record == null) {
+      _fail('Set up a PIN or pattern in Settings first.');
+      return false;
+    }
+    if (record.failedAttempts >= QuickUnlockCrypto.maxAttempts) {
+      _fail('Too many attempts. Unlock with your master password.');
+      return false;
+    }
+    _busy = true;
+    _error = null;
+    _safeNotify();
+    try {
+      final vaultText = await _storage.read();
+      if (vaultText == null) {
+        _fail('No vault was found. Create a new one or restore a backup.');
+        return false;
+      }
+      final envelope = VaultEnvelope.decode(vaultText);
+      if (record.vaultId != base64Encode(envelope.salt)) {
+        await _clearQuickUnlockRecord();
+        _fail(
+          'This PIN or pattern belongs to a different vault. '
+          'Use your master password.',
+        );
+        return false;
+      }
+      final keyBytes = await QuickUnlockCrypto.unlock(record, secret);
+      final opened = await _openWithVaultKey(keyBytes);
+      if (opened) {
+        final reset = record.copyWith(failedAttempts: 0);
+        _quickRecord = reset;
+        try {
+          await _storage.writeQuickUnlock(reset.encode());
+        } catch (_) {
+          // The attempt counter is best-effort; the vault is already open.
+        }
+      }
+      return opened;
+    } on SecretBoxAuthenticationError {
+      final next = record.copyWith(failedAttempts: record.failedAttempts + 1);
+      _quickRecord = next;
+      try {
+        await _storage.writeQuickUnlock(next.encode());
+      } catch (_) {
+        // A failed counter write only weakens the attempt limit.
+      }
+      final left = QuickUnlockCrypto.maxAttempts - next.failedAttempts;
+      if (left <= 0) {
+        _fail('Too many attempts. Unlock with your master password.');
+      } else {
+        _fail(
+          'Wrong PIN or pattern. $left '
+          '${left == 1 ? 'attempt' : 'attempts'} left.',
+        );
+      }
+      return false;
+    } on FormatException {
+      await _clearQuickUnlockRecord();
+      _fail('The quick-unlock record is damaged. Use your master password.');
+      return false;
+    } catch (exception) {
+      _fail('Could not unlock the vault: $exception');
+      return false;
+    } finally {
+      _busy = false;
+      _safeNotify();
+    }
+  }
+
+  Future<void> _clearQuickUnlockRecord() async {
+    _quickRecord = null;
+    try {
+      await _storage.deleteQuickUnlock();
+    } catch (_) {
+      // A stale record is rejected by the vault-id check on the next unlock.
+    }
+  }
+
+  Future<void> _persistDeviceLogin() async {
+    try {
+      await _deviceLoginStore?.write(_deviceLogin);
+    } catch (_) {
+      // The choice still applies for this session; the next launch keeps the
+      // previously saved value.
+    }
+  }
+
+  /// Returns to the master password when a PIN/pattern record is removed.
+  Future<void> _resetDefaultLoginIfQuick() async {
+    if (_deviceLogin.method != DefaultLoginMethod.passwordStyle) return;
+    _deviceLogin = _deviceLogin.copyWith(method: DefaultLoginMethod.password);
+    await _persistDeviceLogin();
   }
 
   void lock() {
@@ -1459,6 +1786,11 @@ class VaultController extends ChangeNotifier {
         }
       }
 
+      // The quick-unlock record wraps the old vault key. Without the PIN or
+      // pattern we cannot rewrap it for the new key, so it is removed.
+      await _clearQuickUnlockRecord();
+      await _resetDefaultLoginIfQuick();
+
       _lastSavedAt = _now();
       _lastActivity = _now();
       _scheduleAutoLock();
@@ -1515,6 +1847,8 @@ class VaultController extends ChangeNotifier {
       await _storage.deletePin();
       _pinEnabled = false;
       data.settings.pinUnlockEnabled = false;
+      await _clearQuickUnlockRecord();
+      await _resetDefaultLoginIfQuick();
 
       _data = data;
       _envelope = envelope;
@@ -1549,10 +1883,14 @@ class VaultController extends ChangeNotifier {
     try {
       await _storage.delete();
       await _storage.deletePin();
+      await _storage.deleteQuickUnlock();
       await _pin.clearDeviceKey();
     } catch (_) {
       // Deleting the main file is what matters; stale PIN data is harmless.
     }
+    _quickRecord = null;
+    _deviceLogin = const DeviceLoginSettings();
+    await _persistDeviceLogin();
     _syncState = null;
     _conflict = null;
     _syncError = null;

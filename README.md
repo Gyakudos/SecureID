@@ -14,8 +14,8 @@ This is a side project for me. Vibe coding for both my own use, and my father's 
 
 Prebuilt binaries are attached to the [latest release](https://github.com/Gyakudos/SecureID/releases/latest):
 
-- **Windows** - `SecureID-Setup-1.0.0.exe` (per-user installer, Flutter runtime included, no admin rights needed)
-- **Android** - `SecureID-1.0.0.apk`
+- **Windows** - `SecureID-Setup-1.2.0.exe` (per-user installer, Flutter runtime included, no admin rights needed)
+- **Android** - `SecureID-1.2.0.apk`
 
 ## Building from source
 

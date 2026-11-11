@@ -12,7 +12,9 @@ SetCompressorDictSize 64
 
 !define PRODUCT_NAME "SecureID"
 !define PRODUCT_PUBLISHER "SecureID"
-!define PRODUCT_VERSION "1.0.0"
+!ifndef PRODUCT_VERSION
+  !define PRODUCT_VERSION "1.1.0"
+!endif
 !define PRODUCT_EXE "secure_id.exe"
 
 !define RELEASE_DIR "F:\SecureID\build\windows\x64\runner\Release"
@@ -27,7 +29,7 @@ InstallDirRegKey HKCU "Software\SecureID" "InstallDir"
 RequestExecutionLevel user
 BrandingText "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 
-VIProductVersion "1.0.0.0"
+VIProductVersion "${PRODUCT_VERSION}.0"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"

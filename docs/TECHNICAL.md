@@ -41,6 +41,10 @@ exported earlier.
 - **Vision accessibility** — larger text (up to 200%), a high-contrast theme,
   screen-reader labels, and spoken account summaries and details. The controls
   are available on the setup and unlock screens too, before the vault opens.
+- **Update check** — the version pill on the vault screen and the
+  **Check for updates** row in Settings query the public GitHub releases API
+  for a newer version, then link straight to the matching installer or APK.
+  It only runs when you ask, and sends no vault, account or device data.
 - **FLAG_SECURE on Android** — the vault is hidden from screenshots and the
   recent-apps thumbnail.
 
@@ -250,3 +254,6 @@ summaries, and the setup/unlock widget flows.
   accounts must confirm their email depends on the project's email settings.
 - Sync stores the vault as one row. Extremely large vaults should move the
   encrypted envelope to object storage instead.
+- The update check needs a network connection. It reads the public GitHub
+  releases API unauthenticated, so it is subject to GitHub's rate limit; a
+  failure is reported in place and never blocks the vault.

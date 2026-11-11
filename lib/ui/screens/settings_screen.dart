@@ -13,6 +13,7 @@ import '../widgets/confirm_dialog.dart';
 import '../widgets/gradient_background.dart';
 import '../widgets/secure_clipboard.dart';
 import '../widgets/strength_meter.dart';
+import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'link_phone_screen.dart';
 
@@ -626,6 +627,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             title: 'About SecureID',
                             icon: Icons.info_outline_rounded,
                             children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading:
+                                    controller.updateStatus ==
+                                        UpdateStatus.checking
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : Icon(
+                                        controller.updateAvailable
+                                            ? Icons.system_update_rounded
+                                            : Icons.sync_rounded,
+                                        color: controller.updateAvailable
+                                            ? kMint
+                                            : null,
+                                      ),
+                                title: const Text('Check for updates'),
+                                subtitle: Text(_updateSubtitle(controller)),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                                onTap:
+                                    controller.updateStatus ==
+                                        UpdateStatus.checking
+                                    ? null
+                                    : () => showUpdateCheck(context),
+                              ),
+                              const Divider(height: 1),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.tag_rounded),
+                                title: const Text('Version'),
+                                subtitle: Text(controller.currentVersion),
+                              ),
+                              const Divider(height: 1),
                               const ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: Icon(Icons.lock_rounded),
@@ -659,6 +699,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  String _updateSubtitle(VaultController controller) {
+    switch (controller.updateStatus) {
+      case UpdateStatus.checking:
+        return 'Contacting GitHub…';
+      case UpdateStatus.available:
+        final version = controller.latestUpdate?.version;
+        return version == null
+            ? 'A newer release is available'
+            : 'SecureID $version is available';
+      case UpdateStatus.upToDate:
+        return 'You are on the latest version';
+      case UpdateStatus.error:
+        return controller.updateError ?? 'The last check did not finish';
+      case UpdateStatus.idle:
+        return 'Search GitHub for a newer release';
+    }
   }
 
   Widget _generatorChip(

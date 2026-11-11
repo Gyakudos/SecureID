@@ -7,6 +7,7 @@ import 'services/account_session.dart';
 import 'services/device_registry.dart';
 import 'services/remote_vault_store.dart';
 import 'services/speech_service.dart';
+import 'services/update_service.dart';
 import 'state/vault_controller.dart';
 import 'storage/accessibility_store.dart';
 import 'storage/device_identity.dart';
@@ -48,6 +49,7 @@ Future<void> main() async {
     deviceIdentityStore: DeviceIdentityStore(),
     accessibilityStore: FileAccessibilityStore(),
     speechService: FlutterTtsSpeechService(),
+    updateService: GitHubUpdateService(),
   );
   await controller.init();
   runApp(SecureIdApp(controller: controller));

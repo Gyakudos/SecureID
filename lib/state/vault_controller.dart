@@ -6,7 +6,9 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter/widgets.dart';
 
+import '../config/app_version.dart';
 import '../models/accessibility_settings.dart';
+import '../models/app_update.dart';
 import '../models/vault_data.dart';
 import '../models/vault_item.dart';
 import '../models/vault_settings.dart';
@@ -16,12 +18,17 @@ import '../services/account_session.dart';
 import '../services/device_registry.dart';
 import '../services/remote_vault_store.dart';
 import '../services/speech_service.dart';
+import '../services/update_service.dart';
 import '../storage/accessibility_store.dart';
 import '../storage/device_identity.dart';
 import '../storage/sync_state_store.dart';
 import '../storage/vault_storage.dart';
+import '../util/version.dart';
 
 enum VaultStatus { initializing, needsSetup, locked, unlocked }
+
+/// The state of the manual GitHub update check.
+enum UpdateStatus { idle, checking, upToDate, available, error }
 
 enum SyncStatus { disabled, signedOut, idle, syncing, conflict, error }
 
@@ -59,6 +66,7 @@ class VaultController extends ChangeNotifier {
     DeviceIdentityStore? deviceIdentityStore,
     AccessibilityStore? accessibilityStore,
     SpeechService? speechService,
+    UpdateService? updateService,
     Duration syncDebounce = const Duration(seconds: 2),
   }) : _storage = storage, // ignore: prefer_initializing_formals
        _pin = pinUnlock ?? PinUnlockService(),
@@ -80,6 +88,8 @@ class VaultController extends ChangeNotifier {
        // ignore: prefer_initializing_formals
        _speech = speechService,
        // ignore: prefer_initializing_formals
+       _updates = updateService,
+       // ignore: prefer_initializing_formals
        _syncDebounce = syncDebounce;
 
   static const int minMasterPasswordLength = 12;
@@ -95,6 +105,7 @@ class VaultController extends ChangeNotifier {
   final DeviceIdentityStore? _deviceIdentityStore;
   final AccessibilityStore? _accessibilityStore;
   final SpeechService? _speech;
+  final UpdateService? _updates;
   final Duration _syncDebounce;
 
   VaultStatus _status = VaultStatus.initializing;
@@ -130,6 +141,12 @@ class VaultController extends ChangeNotifier {
   AccessibilitySettings _accessibility = const AccessibilitySettings();
   bool _speaking = false;
   int _speechGeneration = 0;
+
+  UpdateStatus _updateStatus = UpdateStatus.idle;
+  AppUpdate? _latestUpdate;
+  String? _updateError;
+  DateTime? _lastUpdateCheck;
+  int _updateGeneration = 0;
 
   VaultStatus get status => _status;
   VaultData? get data => _data;
@@ -177,6 +194,22 @@ class VaultController extends ChangeNotifier {
   /// True when this build can read text aloud.
   bool get speechAvailable => _speech != null;
   bool get isSpeaking => _speaking;
+
+  /// The version of the running build, shown in Settings.
+  String get currentVersion => appVersion;
+
+  /// State of the manual GitHub update check.
+  UpdateStatus get updateStatus => _updateStatus;
+
+  /// The newest published release, once a check has succeeded.
+  AppUpdate? get latestUpdate => _latestUpdate;
+
+  /// Why the last update check failed, if it did.
+  String? get updateError => _updateError;
+
+  DateTime? get lastUpdateCheck => _lastUpdateCheck;
+
+  bool get updateAvailable => _updateStatus == UpdateStatus.available;
 
   int get loginCount => _data?.loginCount ?? 0;
   int get passkeyCount => _data?.passkeyCount ?? 0;
@@ -262,6 +295,66 @@ class VaultController extends ChangeNotifier {
     } catch (_) {
       // Nothing to stop.
     }
+    _safeNotify();
+  }
+
+  /// Asks GitHub for the newest published release and compares it with
+  /// [currentVersion].
+  ///
+  /// Safe to call repeatedly: a check already in flight is reused, and a
+  /// result that arrives after the controller is disposed is dropped.
+  Future<void> checkForUpdates() async {
+    final service = _updates;
+    if (service == null) {
+      _updateStatus = UpdateStatus.error;
+      _updateError = 'This build cannot check for updates.';
+      _safeNotify();
+      return;
+    }
+    if (_updateStatus == UpdateStatus.checking) return;
+
+    final generation = ++_updateGeneration;
+    _updateStatus = UpdateStatus.checking;
+    _updateError = null;
+    _safeNotify();
+
+    try {
+      final latest = await service.fetchLatest();
+      if (_disposed || generation != _updateGeneration) return;
+      _lastUpdateCheck = _now();
+      _latestUpdate = latest;
+
+      final current = AppVersion.tryParse(appVersion);
+      final remote = latest == null
+          ? null
+          : AppVersion.tryParse(latest.version);
+      if (latest == null || current == null || remote == null) {
+        // No release published, or an unreadable tag: nothing to offer.
+        _updateStatus = UpdateStatus.upToDate;
+      } else {
+        _updateStatus = remote > current
+            ? UpdateStatus.available
+            : UpdateStatus.upToDate;
+      }
+    } on UpdateException catch (exception) {
+      if (_disposed || generation != _updateGeneration) return;
+      _updateStatus = UpdateStatus.error;
+      _updateError = exception.message;
+    } catch (_) {
+      if (_disposed || generation != _updateGeneration) return;
+      _updateStatus = UpdateStatus.error;
+      _updateError = 'Could not check for updates. Try again later.';
+    }
+
+    _safeNotify();
+  }
+
+  /// Clears the result of the last update check.
+  void dismissUpdateResult() {
+    if (_updateStatus == UpdateStatus.checking) return;
+    _updateStatus = UpdateStatus.idle;
+    _latestUpdate = null;
+    _updateError = null;
     _safeNotify();
   }
 

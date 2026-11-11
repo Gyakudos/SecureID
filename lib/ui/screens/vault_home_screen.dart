@@ -13,6 +13,7 @@ import '../widgets/confirm_dialog.dart';
 import '../widgets/gradient_background.dart';
 import '../widgets/item_detail_sheet.dart';
 import '../widgets/totp_display.dart';
+import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'item_editor_screen.dart';
 import 'settings_screen.dart';
@@ -200,12 +201,26 @@ class _VaultHomeScreenState extends State<VaultHomeScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'SecureID',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleLarge
-                                        ?.copyWith(letterSpacing: -0.3),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 2,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      Text(
+                                        'SecureID',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleLarge
+                                            ?.copyWith(letterSpacing: -0.3),
+                                      ),
+                                      _VersionBadge(
+                                        version: controller.currentVersion,
+                                        updateAvailable:
+                                            controller.updateAvailable,
+                                        onTap: () => showUpdateCheck(context),
+                                      ),
+                                    ],
                                   ),
                                   const SizedBox(height: 1),
                                   Text(
@@ -500,6 +515,77 @@ class _VaultItemCard extends StatelessWidget {
                   ],
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small version pill. Tapping it opens the GitHub update check, so the
+/// version number and the update button are the same affordance.
+class _VersionBadge extends StatelessWidget {
+  const _VersionBadge({
+    required this.version,
+    required this.onTap,
+    this.updateAvailable = false,
+  });
+
+  final String version;
+  final VoidCallback onTap;
+  final bool updateAvailable;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final foreground = updateAvailable ? kMint : scheme.onSurfaceVariant;
+
+    return Tooltip(
+      message: updateAvailable
+          ? 'Version $version - update available'
+          : 'Version $version - check for updates',
+      child: Semantics(
+        button: true,
+        label: 'Version $version. Check for updates.',
+        child: Material(
+          color: updateAvailable
+              ? kMint.withValues(alpha: 0.16)
+              : scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          shape: StadiumBorder(
+            side: BorderSide(
+              color: updateAvailable
+                  ? kMint.withValues(alpha: 0.55)
+                  : scheme.outlineVariant,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (updateAvailable) ...[
+                    Icon(
+                      Icons.arrow_circle_up_rounded,
+                      size: 12,
+                      color: foreground,
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Text(
+                    'v$version',
+                    style: TextStyle(
+                      color: foreground,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

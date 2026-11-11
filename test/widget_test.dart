@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:secure_id/app.dart';
+import 'package:secure_id/config/app_version.dart';
 import 'package:secure_id/models/accessibility_settings.dart';
 import 'package:secure_id/security/vault_crypto.dart';
 import 'package:secure_id/state/vault_controller.dart';
@@ -43,6 +44,8 @@ void main() {
     expect(controller.status, VaultStatus.unlocked);
     expect(find.text('Your vault is empty'), findsOneWidget);
     expect(find.text('Add item'), findsOneWidget);
+    // The version pill doubles as the update button once the vault is open.
+    expect(find.text('v$appVersion'), findsOneWidget);
 
     controller.lock();
     await tester.pumpAndSettle();

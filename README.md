@@ -10,6 +10,8 @@ Still very much a work in progress, right now the working app only works locally
 
 This is a side project for me. Vibe coding for both my own use, and my father's use. 
 
+If you have any issues please contact me on my discord Bygone Era. At the bottom you will find the place called App Development. (https://discord.gg/4MFZWwvwpq) link
+
 ## Download
 
 Prebuilt binaries are attached to the [latest release](https://github.com/Gyakudos/SecureID/releases/latest):

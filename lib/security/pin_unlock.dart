@@ -53,9 +53,14 @@ class PinUnlockCancelled implements Exception {
 /// Thrown when device unlock cannot finish. [message] is safe to show to the
 /// user.
 class PinUnlockException implements Exception {
-  const PinUnlockException(this.message);
+  const PinUnlockException(this.message, {this.permanent = false});
 
   final String message;
+
+  /// True only when the stored record can never work again (the device key was
+  /// invalidated or is missing). Temporary failures keep the record so the user
+  /// does not have to set device unlock up again.
+  final bool permanent;
 
   @override
   String toString() => message;

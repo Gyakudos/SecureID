@@ -108,4 +108,71 @@ void main() {
 
     expect(entered, isNull);
   });
+
+  testWidgets('draws a vertical stroke inside a scroll view', (tester) async {
+    List<int>? entered;
+    final scrollController = ScrollController();
+    addTearDown(scrollController.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            controller: scrollController,
+            child: Column(
+              children: [
+                PatternPad(size: 280, onCompleted: (value) => entered = value),
+                const SizedBox(height: 1200),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    const pad = 44.8;
+    const step = 95.2;
+    final topLeft = tester.getTopLeft(find.byType(PatternPad));
+    Offset center(int index) =>
+        topLeft + Offset(pad + (index % 3) * step, pad + (index ~/ 3) * step);
+
+    // A single vertical drag used to scroll the page instead of drawing.
+    final gesture = await tester.startGesture(center(0));
+    await gesture.moveTo(center(3));
+    await tester.pump();
+    await gesture.moveTo(center(6));
+    await tester.pump();
+    await gesture.moveTo(center(7));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+
+    expect(entered, [0, 3, 6, 7]);
+    expect(scrollController.offset, 0);
+  });
+
+  testWidgets('adds dots skipped by a fast stroke', (tester) async {
+    List<int>? entered;
+    await pump(
+      tester,
+      PatternPad(size: 280, onCompleted: (value) => entered = value),
+    );
+
+    const pad = 44.8;
+    const step = 95.2;
+    final topLeft = tester.getTopLeft(find.byType(PatternPad));
+    Offset center(int index) =>
+        topLeft + Offset(pad + (index % 3) * step, pad + (index ~/ 3) * step);
+
+    // One move from 0 to 2 passes over 1, and one move from 2 to 8 passes over
+    // 5. Both intermediate dots must be recorded.
+    final gesture = await tester.startGesture(center(0));
+    await gesture.moveTo(center(2));
+    await tester.pump();
+    await gesture.moveTo(center(8));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+
+    expect(entered, [0, 1, 2, 5, 8]);
+  });
 }

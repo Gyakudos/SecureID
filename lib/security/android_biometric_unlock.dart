@@ -1,9 +1,34 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'pin_unlock.dart';
+
+/// The biometric state reported by Android.
+enum BiometricAvailability {
+  ok,
+  noHardware,
+  noneEnrolled,
+  hardwareUnavailable,
+  securityUpdateRequired,
+  unsupported,
+  unknown;
+
+  static BiometricAvailability parse(String? value) {
+    return switch (value) {
+      'ok' => BiometricAvailability.ok,
+      'no_hardware' => BiometricAvailability.noHardware,
+      'none_enrolled' => BiometricAvailability.noneEnrolled,
+      'hw_unavailable' => BiometricAvailability.hardwareUnavailable,
+      'security_update_required' =>
+        BiometricAvailability.securityUpdateRequired,
+      'unsupported' => BiometricAvailability.unsupported,
+      _ => BiometricAvailability.unknown,
+    };
+  }
+}
 
 /// Android biometric unlock backed by a hardware-protected Keystore key.
 ///
@@ -47,13 +72,27 @@ class AndroidBiometricUnlock implements PinUnlock {
 
   @override
   Future<bool> isAvailable() async {
-    if (!isPlatformSupported) return false;
+    return await availability() == BiometricAvailability.ok;
+  }
+
+  /// Asks Android for the exact biometric state.
+  ///
+  /// [isAvailable] collapses every failure to `false`, which makes a
+  /// temporary hardware problem look like a missing fingerprint. The richer
+  /// answer lets the UI explain what is actually wrong.
+  Future<BiometricAvailability> availability() async {
+    if (!isPlatformSupported) return BiometricAvailability.unsupported;
     try {
-      return await _channel.invokeMethod<bool>('isAvailable') ?? false;
+      final status = await _channel.invokeMethod<String>('availability');
+      return BiometricAvailability.parse(status);
     } on MissingPluginException {
-      return false;
-    } on PlatformException {
-      return false;
+      return BiometricAvailability.unsupported;
+    } on PlatformException catch (exception) {
+      debugPrint(
+        'SecureID biometric availability failed: '
+        '${exception.code} ${exception.message}',
+      );
+      return BiometricAvailability.unknown;
     }
   }
 
@@ -93,6 +132,42 @@ class AndroidBiometricUnlock implements PinUnlock {
     }
   }
 
+  /// Codes that mean the stored record can never be used again. Everything
+  /// else is treated as temporary so a lockout or a busy prompt does not throw
+  /// away a working biometric enrolment.
+  static const Set<String> _permanentCodes = {
+    'key_invalidated',
+    'key_missing',
+    'bad_data',
+    'bad_args',
+  };
+
+  static String _messageFor(String code, String? fallback) {
+    final message = switch (code) {
+      'none_enrolled' =>
+        'No fingerprint or face is enrolled on this phone. Add one in Android '
+            'Settings first.',
+      'no_hardware' => 'This phone does not have biometric hardware.',
+      'hw_unavailable' =>
+        'Biometric hardware is temporarily unavailable. Try again.',
+      'security_update_required' =>
+        'Your phone needs a security update before biometrics can be used.',
+      'locked_out' =>
+        'Too many attempts. Use your master password, then try again later.',
+      'locked_out_permanent' =>
+        'Biometrics are locked. Use your master password, then re-enable '
+            'biometric unlock.',
+      'busy' => 'Another biometric prompt is already open.',
+      'no_device_credential' =>
+        'Set a screen lock on this phone, then add a fingerprint or face.',
+      _ => null,
+    };
+    if (message != null) return message;
+    final trimmed = fallback?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) return trimmed;
+    return 'Biometric unlock failed. Use your master password.';
+  }
+
   Future<Uint8List> _invokeBytes(
     String method,
     Map<String, Object?> arguments,
@@ -104,9 +179,14 @@ class AndroidBiometricUnlock implements PinUnlock {
       }
       return result;
     } on PlatformException catch (exception) {
-      if (exception.code == 'cancelled') throw const PinUnlockCancelled();
+      final code = exception.code;
+      debugPrint(
+        'SecureID biometric $method failed: $code ${exception.message}',
+      );
+      if (code == 'cancelled') throw const PinUnlockCancelled();
       throw PinUnlockException(
-        exception.message ?? 'Android biometric unlock failed.',
+        _messageFor(code, exception.message),
+        permanent: _permanentCodes.contains(code),
       );
     } on MissingPluginException {
       throw const PinUnlockException(

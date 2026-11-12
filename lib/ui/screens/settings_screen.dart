@@ -209,7 +209,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const Spacer(),
                         Text(
-                          'v1.0.0',
+                          'v${controller.currentVersion}',
                           style: TextStyle(
                             color: scheme.onSurfaceVariant,
                             fontSize: 12,
@@ -455,15 +455,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   ),
                                   title: Text(controller.pinUnlockButtonLabel),
                                   subtitle: Text(
-                                    controller.pinAvailable
+                                    controller.pinEnabled ||
+                                            controller.pinAvailable
                                         ? controller.pinAvailableHint
                                         : controller.pinUnavailableHint,
                                   ),
                                   value: controller.pinEnabled,
-                                  onChanged:
-                                      controller.pinAvailable && !_pinBusy
-                                      ? _togglePin
-                                      : null,
+                                  onChanged: _pinBusy ? null : _togglePin,
                                 ),
                                 if (_pinBusy)
                                   const Padding(

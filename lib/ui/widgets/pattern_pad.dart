@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// A 3x3 pattern lock. Drag across dots to draw a pattern.
 ///
@@ -28,6 +30,7 @@ class PatternPad extends StatefulWidget {
 class _PatternPadState extends State<PatternPad> {
   final List<int> _dots = [];
   bool _dragging = false;
+  Offset? _lastPoint;
 
   List<Offset> _centers() {
     final padding = widget.size * 0.16;
@@ -53,18 +56,39 @@ class _PatternPadState extends State<PatternPad> {
     if (!widget.enabled) return;
     final dot = _dotAt(position);
     setState(() {
-      _dots
-        ..clear()
-        ..addAll(dot == null ? const <int>[] : [dot]);
+      _dots.clear();
       _dragging = dot != null;
+      _lastPoint = position;
+      if (dot != null) _dots.add(dot);
     });
+    if (dot != null) _haptic();
   }
 
   void _move(Offset position) {
     if (!_dragging) return;
-    final dot = _dotAt(position);
-    if (dot == null || _dots.contains(dot)) return;
-    setState(() => _dots.add(dot));
+    final last = _lastPoint;
+    _lastPoint = position;
+    if (last == null) return;
+
+    // A fast stroke can jump from one dot to the next without a pointer event
+    // landing inside the dot. Walk the segment and collect every dot the
+    // finger passed over.
+    final distance = (position - last).distance;
+    final step = math.max(2.0, widget.size * 0.02);
+    final samples = math.max(1, (distance / step).ceil());
+    var changed = false;
+    for (var i = 1; i <= samples; i++) {
+      final sample = Offset.lerp(last, position, i / samples);
+      if (sample == null) continue;
+      final dot = _dotAt(sample);
+      if (dot != null && !_dots.contains(dot)) {
+        _dots.add(dot);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    setState(() {});
+    _haptic();
   }
 
   void _end() {
@@ -73,8 +97,18 @@ class _PatternPadState extends State<PatternPad> {
     setState(() {
       _dragging = false;
       _dots.clear();
+      _lastPoint = null;
     });
     if (result.length >= widget.minDots) widget.onCompleted(result);
+  }
+
+  void _haptic() {
+    // Haptics are a nicety, not a requirement, so failures are ignored.
+    try {
+      HapticFeedback.selectionClick();
+    } catch (_) {
+      // Ignore platforms without haptic feedback.
+    }
   }
 
   @override
@@ -84,12 +118,22 @@ class _PatternPadState extends State<PatternPad> {
     return SizedBox(
       width: widget.size,
       height: widget.size,
-      child: GestureDetector(
+      child: RawGestureDetector(
         behavior: HitTestBehavior.opaque,
-        onPanStart: (details) => _start(details.localPosition),
-        onPanUpdate: (details) => _move(details.localPosition),
-        onPanEnd: (_) => _end(),
-        onPanCancel: _end,
+        gestures: <Type, GestureRecognizerFactory>{
+          _EagerPanGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<_EagerPanGestureRecognizer>(
+                () => _EagerPanGestureRecognizer(),
+                (recognizer) {
+                  recognizer.onStart = (details) =>
+                      _start(details.localPosition);
+                  recognizer.onUpdate = (details) =>
+                      _move(details.localPosition);
+                  recognizer.onEnd = (_) => _end();
+                  recognizer.onCancel = _end;
+                },
+              ),
+        },
         child: CustomPaint(
           painter: _PatternPainter(
             dots: List<int>.of(_dots),
@@ -103,6 +147,20 @@ class _PatternPadState extends State<PatternPad> {
         ),
       ),
     );
+  }
+}
+
+/// A pan recognizer that claims the pointer as soon as it goes down.
+///
+/// The pattern pad is often shown inside a [SingleChildScrollView]. A normal
+/// pan recognizer competes with the scroll view's drag recognizer, and the
+/// scroll view wins on vertical strokes, so the pattern never gets drawn.
+/// Accepting eagerly keeps the stroke inside the pad.
+class _EagerPanGestureRecognizer extends PanGestureRecognizer {
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    resolve(GestureDisposition.accepted);
   }
 }
 

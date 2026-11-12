@@ -156,12 +156,62 @@ void main() {
 
     pin.failure = const PinUnlockException(
       'Biometrics changed on this phone. Use your master password.',
+      permanent: true,
     );
     expect(await controller.unlockWithPin(), isFalse);
     expect(controller.status, VaultStatus.locked);
     expect(storage.pin, isNull);
     expect(controller.pinEnabled, isFalse);
     expect(controller.error, contains('Biometrics changed'));
+  });
+
+  test('a temporary device failure keeps the record', () async {
+    await controller.init();
+    await controller.createVault(password);
+    await controller.enablePinUnlock();
+    controller.lock();
+
+    pin.failure = const PinUnlockException('Too many attempts. Try later.');
+    expect(await controller.unlockWithPin(), isFalse);
+    expect(controller.status, VaultStatus.locked);
+    expect(storage.pin, isNotNull);
+    expect(controller.pinEnabled, isTrue);
+
+    pin.failure = null;
+    expect(await controller.unlockWithPin(), isTrue);
+  });
+
+  test('creating a vault makes device unlock available to the UI', () async {
+    await controller.init();
+    await controller.createVault(password);
+
+    expect(controller.pinAvailable, isTrue);
+    expect(controller.pinEnabled, isFalse);
+  });
+
+  test(
+    'enables device unlock even when availability is a false negative',
+    () async {
+      pin.available = false;
+      await controller.init();
+      await controller.createVault(password);
+
+      expect(await controller.enablePinUnlock(), isTrue);
+      expect(controller.pinEnabled, isTrue);
+      expect(storage.pin, isNotNull);
+    },
+  );
+
+  test('keeps a stored record when availability reports false', () async {
+    await controller.init();
+    await controller.createVault(password);
+    await controller.enablePinUnlock();
+    controller.lock();
+
+    pin.available = false;
+    expect(await controller.unlock(password), isTrue);
+    expect(controller.pinEnabled, isTrue);
+    expect(storage.pin, isNotNull);
   });
 
   test('cancelling while enabling does not turn device unlock on', () async {

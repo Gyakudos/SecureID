@@ -26,11 +26,31 @@ void main() {
   }
 
   test('reports availability from the platform channel', () async {
-    mockChannel((_) async => true);
+    mockChannel((call) async {
+      expect(call.method, 'availability');
+      return 'ok';
+    });
     expect(await build().isAvailable(), isTrue);
 
-    mockChannel((_) async => false);
+    mockChannel((_) async => 'none_enrolled');
     expect(await build().isAvailable(), isFalse);
+    expect(await build().availability(), BiometricAvailability.noneEnrolled);
+  });
+
+  test('parses every availability status', () async {
+    for (final entry in {
+      'ok': BiometricAvailability.ok,
+      'no_hardware': BiometricAvailability.noHardware,
+      'none_enrolled': BiometricAvailability.noneEnrolled,
+      'hw_unavailable': BiometricAvailability.hardwareUnavailable,
+      'security_update_required': BiometricAvailability.securityUpdateRequired,
+      'unsupported': BiometricAvailability.unsupported,
+      'error': BiometricAvailability.unknown,
+      'something-new': BiometricAvailability.unknown,
+    }.entries) {
+      mockChannel((_) async => entry.key);
+      expect(await build().availability(), entry.value);
+    }
   });
 
   test(
@@ -96,7 +116,7 @@ void main() {
     );
   });
 
-  test('maps a key invalidation to a readable PinUnlockException', () async {
+  test('maps a key invalidation to a permanent readable error', () async {
     mockChannel(
       (_) async => throw PlatformException(
         code: 'key_invalidated',
@@ -109,10 +129,48 @@ void main() {
         const PinVaultRecord(vaultId: 'salt', wrappedKey: [4, 5, 6]),
       ),
       throwsA(
+        isA<PinUnlockException>()
+            .having((e) => e.message, 'message', contains('Biometrics changed'))
+            .having((e) => e.permanent, 'permanent', isTrue),
+      ),
+    );
+  });
+
+  test('keeps a lockout as a temporary failure', () async {
+    mockChannel(
+      (_) async => throw PlatformException(
+        code: 'locked_out',
+        message: 'Too many attempts.',
+      ),
+    );
+
+    await expectLater(
+      build().unwrapVaultKey(
+        const PinVaultRecord(vaultId: 'salt', wrappedKey: [4, 5, 6]),
+      ),
+      throwsA(
+        isA<PinUnlockException>()
+            .having((e) => e.message, 'message', contains('Too many attempts'))
+            .having((e) => e.permanent, 'permanent', isFalse),
+      ),
+    );
+  });
+
+  test('explains a missing biometric enrolment', () async {
+    mockChannel(
+      (_) async => throw PlatformException(
+        code: 'none_enrolled',
+        message: 'No biometrics.',
+      ),
+    );
+
+    await expectLater(
+      build().wrapVaultKey(vaultKey: [1], salt: [2]),
+      throwsA(
         isA<PinUnlockException>().having(
           (e) => e.message,
           'message',
-          contains('Biometrics changed'),
+          contains('No fingerprint or face'),
         ),
       ),
     );

@@ -173,7 +173,7 @@ winget install --id NSIS.NSIS -e
 powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1 -BuildFirst
 ```
 
-The result is `dist\SecureID-Setup-1.0.0.exe`. It is a per-user installer: it
+The result is `dist\SecureID-Setup-1.2.5.exe`. It is a per-user installer: it
 does **not** require administrator rights and installs to
 `%LOCALAPPDATA%\Programs\SecureID`. It bundles the Flutter engine and every
 runtime DLL, so the target machine does not need Flutter installed. It creates

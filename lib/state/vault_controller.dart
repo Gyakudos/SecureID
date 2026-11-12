@@ -175,7 +175,7 @@ class VaultController extends ChangeNotifier {
   DateTime? get lastSavedAt => _lastSavedAt;
   DateTime? get lastActivity => _lastActivity;
   bool get pinAvailable => _pinAvailable;
-  bool get pinEnabled => _pinEnabled && _pinAvailable;
+  bool get pinEnabled => _pinEnabled;
   bool get pinPlatformSupported => _pin.isPlatformSupported;
 
   /// The platform name for device unlock, e.g. "Windows Hello".
@@ -294,8 +294,11 @@ class VaultController extends ChangeNotifier {
       final exists = await _storage.exists();
       if (exists) {
         _status = VaultStatus.locked;
-        _pinAvailable = await _pin.isAvailable();
-        _pinEnabled = _pinAvailable && await _storage.pinExists();
+        _pinAvailable = await _pinAvailabilityHint();
+        // The record file is the source of truth. Availability is only a hint:
+        // Android occasionally reports a false negative right after boot or
+        // after an update, and gating on it hid a working enrolment.
+        _pinEnabled = await _storage.pinExists();
       } else {
         _status = VaultStatus.needsSetup;
         _pinAvailable = false;
@@ -857,7 +860,7 @@ class VaultController extends ChangeNotifier {
       }
 
       _status = VaultStatus.locked;
-      _pinAvailable = await _pin.isAvailable();
+      _pinAvailable = await _pinAvailabilityHint();
       return true;
     } on FormatException {
       _fail('That code is not a SecureID vault link.');
@@ -1064,7 +1067,7 @@ class VaultController extends ChangeNotifier {
       _envelope = null;
       if (_status == VaultStatus.needsSetup) {
         _status = VaultStatus.locked;
-        _pinAvailable = await _pin.isAvailable();
+        _pinAvailable = await _pinAvailabilityHint();
       }
     }
 
@@ -1175,6 +1178,9 @@ class VaultController extends ChangeNotifier {
       _keyBytes = Uint8List.fromList(await sealed.key.extractBytes());
       _status = VaultStatus.unlocked;
       _pinEnabled = false;
+      _pinAvailable = await _pinAvailabilityHint();
+      // A brand-new vault cannot reuse a record from an older vault.
+      await _clearDeviceUnlockRecord();
       await _clearQuickUnlockRecord();
       await _resetDefaultLoginIfQuick();
       _lastActivity = _now();
@@ -1251,19 +1257,56 @@ class VaultController extends ChangeNotifier {
   }
 
   /// Device unlock is device-specific, so the unlock record file is the source
-  /// of truth rather than the synced vault settings. A record is only kept when
-  /// the platform unlock is available on this device.
+  /// of truth rather than the synced vault settings.
   Future<void> _reconcilePinAfterPasswordUnlock() async {
+    _pinAvailable = await _pinAvailabilityHint();
     try {
-      final pinFileExists = await _storage.pinExists();
-      _pinAvailable = await _pin.isAvailable();
-      _pinEnabled = pinFileExists && _pinAvailable;
-      if (!_pinEnabled && pinFileExists) {
-        await _storage.deletePin();
-        await _pin.clearDeviceKey();
+      if (!await _storage.pinExists()) {
+        _pinEnabled = false;
+        return;
       }
+      final pinText = await _storage.readPin();
+      final vaultText = await _storage.read();
+      if (pinText == null || vaultText == null) {
+        await _clearDeviceUnlockRecord();
+        _pinEnabled = false;
+        return;
+      }
+      final record = PinVaultRecord.decode(pinText);
+      final envelope = VaultEnvelope.decode(vaultText);
+      if (record.vaultId != base64Encode(envelope.salt)) {
+        // The record belongs to a different vault.
+        await _clearDeviceUnlockRecord();
+        _pinEnabled = false;
+        return;
+      }
+      _pinEnabled = true;
+    } on FormatException {
+      // A damaged record can never be used, so remove it.
+      await _clearDeviceUnlockRecord();
+      _pinEnabled = false;
     } catch (_) {
       _pinEnabled = false;
+    }
+  }
+
+  /// A best-effort availability check. Platform unlock is still attempted when
+  /// this returns false, because Android can report a false negative.
+  Future<bool> _pinAvailabilityHint() async {
+    try {
+      return await _pin.isAvailable();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Removes the device unlock record and the device key that wraps it.
+  Future<void> _clearDeviceUnlockRecord() async {
+    try {
+      await _storage.deletePin();
+      await _pin.clearDeviceKey();
+    } catch (_) {
+      // A stale record is rejected by the vault-id check on the next unlock.
     }
   }
 
@@ -1301,7 +1344,7 @@ class VaultController extends ChangeNotifier {
   /// Prompts for the platform unlock (Windows Hello or Android biometrics) and
   /// unlocks with the device-wrapped vault key.
   Future<bool> unlockWithPin() async {
-    if (_busy || !_pinAvailable) return false;
+    if (_busy) return false;
     _busy = true;
     _error = null;
     _safeNotify();
@@ -1336,7 +1379,12 @@ class VaultController extends ChangeNotifier {
       _fail('${_pin.featureName} was cancelled.');
       return false;
     } on PinUnlockException catch (exception) {
-      await _discardPinRecord();
+      // Only discard the record when the platform says it can never work
+      // again. A lockout, a busy prompt or a temporary hardware failure must
+      // not force the user to enrol their fingerprint again.
+      if (exception.permanent) {
+        await _discardPinRecord();
+      }
       _fail(exception.message);
       return false;
     } on SecretBoxAuthenticationError {
@@ -1347,8 +1395,8 @@ class VaultController extends ChangeNotifier {
       await _discardPinRecord();
       _fail('${_pin.featureName} unlock failed. Use your master password.');
       return false;
-    } catch (_) {
-      await _discardPinRecord();
+    } catch (exception) {
+      debugPrint('SecureID: device unlock failed: $exception');
       _fail('${_pin.featureName} unlock failed. Use your master password.');
       return false;
     } finally {
@@ -1361,12 +1409,7 @@ class VaultController extends ChangeNotifier {
   /// vault (wrong vault, missing device key or failed decryption).
   Future<void> _discardPinRecord() async {
     _pinEnabled = false;
-    try {
-      await _storage.deletePin();
-      await _pin.clearDeviceKey();
-    } catch (_) {
-      // Nothing else to do; the master password still works.
-    }
+    await _clearDeviceUnlockRecord();
   }
 
   Future<bool> enablePinUnlock() async {
@@ -1384,10 +1427,8 @@ class VaultController extends ChangeNotifier {
     _error = null;
     _safeNotify();
     try {
-      if (!await _pin.isAvailable()) {
-        _fail(_pin.unavailableHint);
-        return false;
-      }
+      // Do not gate this on isAvailable(): Android can report a false
+      // negative. The prompt itself reports the real reason when it fails.
       final record = await _pin.wrapVaultKey(
         vaultKey: _keyBytes!,
         salt: _envelope!.salt,

@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
+import android.util.Log
 import android.view.WindowManager
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -37,7 +38,12 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "isAvailable" -> result.success(isBiometricAvailable())
+            "isAvailable" -> result.success(availabilityStatus() == STATUS_OK)
+            "availability" -> {
+                val status = availabilityStatus()
+                Log.i(TAG, "Biometric availability: $status")
+                result.success(status)
+            }
             "wrap" -> {
                 val alias = call.argument<String>("alias")
                 val key = call.argument<ByteArray>("key")
@@ -64,13 +70,28 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
-    private fun isBiometricAvailable(): Boolean {
+    /**
+     * Reports the exact biometric state instead of a bare boolean, so the Dart
+     * side can tell "no hardware" apart from a temporary lockout.
+     */
+    private fun availabilityStatus(): String {
         return try {
-            BiometricManager.from(this)
-                .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
-                BiometricManager.BIOMETRIC_SUCCESS
-        } catch (_: Exception) {
-            false
+            when (
+                BiometricManager.from(this)
+                    .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            ) {
+                BiometricManager.BIOMETRIC_SUCCESS -> STATUS_OK
+                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "no_hardware"
+                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> "hw_unavailable"
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "none_enrolled"
+                BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED ->
+                    "security_update_required"
+                BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> "unsupported"
+                else -> "unknown"
+            }
+        } catch (exception: Exception) {
+            Log.w(TAG, "Biometric availability check failed", exception)
+            "error"
         }
     }
 
@@ -99,6 +120,7 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
         } catch (exception: Exception) {
+            Log.e(TAG, "Could not wrap the vault key", exception)
             result.error(errorCode(exception), errorMessage(exception), null)
         }
     }
@@ -131,6 +153,7 @@ class MainActivity : FlutterFragmentActivity() {
                 active.doFinal(ciphertext)
             }
         } catch (exception: Exception) {
+            Log.e(TAG, "Could not unwrap the vault key", exception)
             result.error(errorCode(exception), errorMessage(exception), null)
         }
     }
@@ -159,12 +182,14 @@ class MainActivity : FlutterFragmentActivity() {
                 pendingResult = null
                 if (pending == null) return
                 if (authenticatedCipher == null) {
+                    Log.w(TAG, "Biometric prompt succeeded without a cipher")
                     pending.error("failed", failureMessage, null)
                     return
                 }
                 try {
                     pending.success(complete(authenticatedCipher))
                 } catch (exception: Exception) {
+                    Log.e(TAG, "Biometric operation failed after authentication", exception)
                     pending.error(errorCode(exception), errorMessage(exception), null)
                 }
             }
@@ -173,16 +198,12 @@ class MainActivity : FlutterFragmentActivity() {
                 val pending = pendingResult
                 pendingResult = null
                 if (pending == null) return
-                when (errorCode) {
-                    BiometricPrompt.ERROR_NEGATIVE_BUTTON,
-                    BiometricPrompt.ERROR_USER_CANCELED,
-                    BiometricPrompt.ERROR_CANCELED,
-                    -> pending.error("cancelled", errString.toString(), null)
-                    BiometricPrompt.ERROR_LOCKOUT,
-                    BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
-                    -> pending.error("locked_out", errString.toString(), null)
-                    else -> pending.error("auth_failed", errString.toString(), null)
-                }
+                Log.w(TAG, "Biometric prompt error $errorCode: $errString")
+                pending.error(
+                    promptErrorCode(errorCode),
+                    promptErrorMessage(errorCode, errString),
+                    null,
+                )
             }
 
             override fun onAuthenticationFailed() {
@@ -262,11 +283,56 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
+    private fun promptErrorCode(errorCode: Int): String {
+        return when (errorCode) {
+            BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+            BiometricPrompt.ERROR_USER_CANCELED,
+            BiometricPrompt.ERROR_CANCELED,
+            -> "cancelled"
+            BiometricPrompt.ERROR_LOCKOUT -> "locked_out"
+            BiometricPrompt.ERROR_LOCKOUT_PERMANENT -> "locked_out_permanent"
+            BiometricPrompt.ERROR_NO_BIOMETRICS -> "none_enrolled"
+            BiometricPrompt.ERROR_HW_NOT_PRESENT -> "no_hardware"
+            BiometricPrompt.ERROR_HW_UNAVAILABLE -> "hw_unavailable"
+            BiometricPrompt.ERROR_SECURITY_UPDATE_REQUIRED -> "security_update_required"
+            BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL -> "no_device_credential"
+            else -> "auth_failed"
+        }
+    }
+
+    private fun promptErrorMessage(errorCode: Int, fallback: CharSequence): String {
+        return when (errorCode) {
+            BiometricPrompt.ERROR_NO_BIOMETRICS ->
+                "No fingerprint or face is enrolled on this phone. Add one in " +
+                    "Android Settings first."
+            BiometricPrompt.ERROR_HW_NOT_PRESENT ->
+                "This phone does not have biometric hardware."
+            BiometricPrompt.ERROR_HW_UNAVAILABLE ->
+                "Biometric hardware is temporarily unavailable. Try again."
+            BiometricPrompt.ERROR_SECURITY_UPDATE_REQUIRED ->
+                "Your phone needs a security update before biometrics can be used."
+            BiometricPrompt.ERROR_LOCKOUT ->
+                "Too many attempts. Use your master password, then try again later."
+            BiometricPrompt.ERROR_LOCKOUT_PERMANENT ->
+                "Biometrics are locked. Use your master password, then re-enable " +
+                    "biometric unlock."
+            BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL ->
+                "Set a screen lock on this phone, then add a fingerprint or face."
+            else -> fallback.toString().ifBlank {
+                "Biometric unlock failed. Use your master password."
+            }
+        }
+    }
+
     private fun errorCode(exception: Exception): String {
         return when (exception) {
             is KeyPermanentlyInvalidatedException,
             is UnrecoverableKeyException,
+            is java.security.InvalidKeyException,
             -> "key_invalidated"
+            is javax.crypto.AEADBadTagException,
+            is IllegalArgumentException,
+            -> "bad_data"
             else -> "failed"
         }
     }
@@ -275,17 +341,23 @@ class MainActivity : FlutterFragmentActivity() {
         return when (exception) {
             is KeyPermanentlyInvalidatedException,
             is UnrecoverableKeyException,
+            is java.security.InvalidKeyException,
             -> "Biometrics changed on this phone. Use your master password, then " +
                 "enable biometric unlock again."
+            is javax.crypto.AEADBadTagException ->
+                "The biometric record could not be read. Use your master password, " +
+                    "then enable biometric unlock again."
             else -> "Biometric unlock failed. Use your master password."
         }
     }
 
     companion object {
+        private const val TAG = "SecureIDBiometric"
         private const val CHANNEL = "com.local.secure_id/biometric"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val IV_LENGTH = 12
+        private const val STATUS_OK = "ok"
         private val AAD = "secureid-pin-v1".toByteArray(Charsets.UTF_8)
     }
 }

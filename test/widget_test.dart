@@ -92,6 +92,25 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('settings shows the real app version', (tester) async {
+    final controller = buildController(InMemoryVaultStorage());
+    addTearDown(controller.dispose);
+    await controller.init();
+    await controller.createVault(password);
+
+    await tester.pumpWidget(SecureIdApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Settings (Ctrl+,)'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('v$appVersion'), findsWidgets);
+    expect(find.text('v1.0.0'), findsNothing);
+
+    controller.lock();
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('applies saved vision settings before the vault is unlocked', (
     tester,
   ) async {

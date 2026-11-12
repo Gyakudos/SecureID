@@ -16,6 +16,7 @@ import '../widgets/strength_meter.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'link_phone_screen.dart';
+import 'trusted_device_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -293,11 +294,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             children: [
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.qr_code_2_rounded),
-                                title: const Text('Link a phone'),
+                                leading: const Icon(Icons.shield_outlined),
+                                title: const Text('Trusted devices'),
                                 subtitle: const Text(
-                                  'Send this vault to a phone, or receive one, '
-                                  'over your local network. Works offline.',
+                                  'Pair once, then transfer the encrypted vault '
+                                  'with one tap. Works offline.',
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const TrustedDeviceScreen(),
+                                  ),
+                                ),
+                              ),
+                              const Divider(height: 1),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.qr_code_2_rounded),
+                                title: const Text('One-time link'),
+                                subtitle: const Text(
+                                  'Send or receive a vault with a single-use '
+                                  'QR code instead.',
                                 ),
                                 trailing: const Icon(
                                   Icons.chevron_right_rounded,

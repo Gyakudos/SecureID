@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app.dart';
 import 'config/supabase_config.dart';
+import 'security/device_seal.dart';
 import 'services/account_session.dart';
 import 'services/device_registry.dart';
 import 'services/remote_vault_store.dart';
@@ -14,6 +15,7 @@ import 'storage/device_identity.dart';
 import 'storage/device_login_store.dart';
 import 'storage/file_vault_storage.dart';
 import 'storage/sync_state_store.dart';
+import 'storage/trusted_device_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -50,6 +52,7 @@ Future<void> main() async {
     deviceIdentityStore: DeviceIdentityStore(),
     accessibilityStore: FileAccessibilityStore(),
     deviceLoginStore: FileDeviceLoginStore(),
+    trustedDeviceStore: TrustedDeviceStore(seal: createDeviceSeal()),
     speechService: FlutterTtsSpeechService(),
     updateService: GitHubUpdateService(),
   );

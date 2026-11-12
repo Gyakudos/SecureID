@@ -13,7 +13,7 @@ SetCompressorDictSize 64
 !define PRODUCT_NAME "SecureID"
 !define PRODUCT_PUBLISHER "SecureID"
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "1.2.5"
+  !define PRODUCT_VERSION "1.2.51"
 !endif
 !define PRODUCT_EXE "secure_id.exe"
 

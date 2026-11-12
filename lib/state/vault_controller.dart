@@ -11,6 +11,7 @@ import '../config/app_version.dart';
 import '../models/accessibility_settings.dart';
 import '../models/app_update.dart';
 import '../models/device_login.dart';
+import '../models/trusted_device.dart';
 import '../models/vault_data.dart';
 import '../models/vault_item.dart';
 import '../models/vault_settings.dart';
@@ -27,6 +28,7 @@ import '../storage/accessibility_store.dart';
 import '../storage/device_identity.dart';
 import '../storage/device_login_store.dart';
 import '../storage/sync_state_store.dart';
+import '../storage/trusted_device_store.dart';
 import '../storage/vault_storage.dart';
 import '../util/version.dart';
 
@@ -71,6 +73,7 @@ class VaultController extends ChangeNotifier {
     DeviceIdentityStore? deviceIdentityStore,
     AccessibilityStore? accessibilityStore,
     DeviceLoginStore? deviceLoginStore,
+    TrustedDeviceStore? trustedDeviceStore,
     SpeechService? speechService,
     UpdateService? updateService,
     QuickUnlockConfig quickUnlockConfig = const QuickUnlockConfig(),
@@ -95,6 +98,8 @@ class VaultController extends ChangeNotifier {
        // ignore: prefer_initializing_formals
        _deviceLoginStore = deviceLoginStore,
        // ignore: prefer_initializing_formals
+       _trustedDeviceStore = trustedDeviceStore,
+       // ignore: prefer_initializing_formals
        _speech = speechService,
        // ignore: prefer_initializing_formals
        _updates = updateService,
@@ -116,6 +121,7 @@ class VaultController extends ChangeNotifier {
   final DeviceIdentityStore? _deviceIdentityStore;
   final AccessibilityStore? _accessibilityStore;
   final DeviceLoginStore? _deviceLoginStore;
+  final TrustedDeviceStore? _trustedDeviceStore;
   final SpeechService? _speech;
   final UpdateService? _updates;
   final QuickUnlockConfig _quickConfig;
@@ -157,6 +163,10 @@ class VaultController extends ChangeNotifier {
 
   DeviceLoginSettings _deviceLogin = const DeviceLoginSettings();
   QuickUnlockRecord? _quickRecord;
+
+  List<TrustedDevice> _trustedDevices = const [];
+  bool _trustedLoaded = false;
+  String? _trustedError;
 
   UpdateStatus _updateStatus = UpdateStatus.idle;
   AppUpdate? _latestUpdate;
@@ -256,6 +266,18 @@ class VaultController extends ChangeNotifier {
       List<LinkedDevice>.unmodifiable(_linkedDevices);
   bool get devicesLoading => _devicesLoading;
   String? get devicesError => _devicesError;
+
+  /// True when this build can keep a local trusted-device list.
+  bool get trustedDeviceAvailable => _trustedDeviceStore != null;
+
+  /// Devices paired for offline vault transfers. Trust only authorises the
+  /// transport; the master password is still required to decrypt.
+  List<TrustedDevice> get trustedDevices =>
+      List<TrustedDevice>.unmodifiable(_trustedDevices);
+  bool get trustedDevicesLoading => !_trustedLoaded;
+  String? get trustedDevicesError => _trustedError;
+  String get trustedSealLabel =>
+      _trustedDeviceStore?.sealLabel ?? 'Not available';
 
   /// Display and speech preferences for low-vision users. These are stored
   /// outside the encrypted vault so they apply on the setup and unlock screens.
@@ -872,6 +894,76 @@ class VaultController extends ChangeNotifier {
       _busy = false;
       _safeNotify();
     }
+  }
+
+  /// Loads the local trusted-device list.
+  Future<void> loadTrustedDevices({bool force = false}) async {
+    final store = _trustedDeviceStore;
+    if (store == null) return;
+    if (_trustedLoaded && !force) return;
+    try {
+      final devices = await store.load(force: force);
+      _trustedDevices = devices;
+      _trustedError = store.lastError;
+    } catch (exception) {
+      _trustedError = exception is TrustedDeviceStoreException
+          ? exception.message
+          : 'The trusted-device list could not be read.';
+    } finally {
+      _trustedLoaded = true;
+      _safeNotify();
+    }
+  }
+
+  Future<TrustedDevice?> findTrustedDevice(String deviceId) async {
+    for (final device in _trustedDevices) {
+      if (device.deviceId == deviceId) return device;
+    }
+    final store = _trustedDeviceStore;
+    if (store == null) return null;
+    try {
+      return await store.find(deviceId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> rememberTrustedDevice(TrustedDevice device) async {
+    final store = _trustedDeviceStore;
+    if (store == null) return;
+    await store.remember(device);
+    await loadTrustedDevices(force: true);
+  }
+
+  Future<void> forgetTrustedDevice(String deviceId) async {
+    final store = _trustedDeviceStore;
+    if (store == null) return;
+    await store.forget(deviceId);
+    await loadTrustedDevices(force: true);
+  }
+
+  Future<void> setTrustedDeviceAutoAccept(
+    String deviceId,
+    bool autoAccept,
+  ) async {
+    final store = _trustedDeviceStore;
+    if (store == null) return;
+    await store.setAutoAccept(deviceId, autoAccept);
+    await loadTrustedDevices(force: true);
+  }
+
+  Future<void> touchTrustedDevice(String deviceId, {String? address}) async {
+    final store = _trustedDeviceStore;
+    if (store == null) return;
+    await store.touch(deviceId, address: address);
+    await loadTrustedDevices(force: true);
+  }
+
+  Future<void> resetTrustedDevices() async {
+    final store = _trustedDeviceStore;
+    if (store == null) return;
+    await store.reset();
+    await loadTrustedDevices(force: true);
   }
 
   Future<void> _runSync() async {

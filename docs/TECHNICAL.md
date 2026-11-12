@@ -43,6 +43,10 @@ exported earlier.
 - **Linked phone** — move the encrypted vault between Windows and Android over
   the local network with a one-time QR code. Works fully offline, with no
   account and no internet connection.
+- **Trusted devices** — pair a phone and a PC once by scanning a QR code, then
+  send the encrypted vault with one tap per side. The trust key is sealed with
+  DPAPI on Windows or the Android Keystore, and only authorises transport: the
+  master password is still required to decrypt. Works fully offline.
 - **Linked devices** — when signed in, the account screen lists every device
   that has synced, with its platform and last-seen time.
 - **Encrypted backups** — export and restore the sealed vault file.
@@ -173,7 +177,7 @@ winget install --id NSIS.NSIS -e
 powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1 -BuildFirst
 ```
 
-The result is `dist\SecureID-Setup-1.2.5.exe`. It is a per-user installer: it
+The result is `dist\SecureID-Setup-1.2.51.exe`. It is a per-user installer: it
 does **not** require administrator rights and installs to
 `%LOCALAPPDATA%\Programs\SecureID`. It bundles the Flutter engine and every
 runtime DLL, so the target machine does not need Flutter installed. It creates
@@ -226,6 +230,43 @@ expires after 10 minutes. On Windows, allow the app through the firewall if
 prompted. Receiving a vault replaces any vault already on the receiving device,
 so export a backup first if needed.
 
+### Trusted devices
+
+Trusted devices turn the one-time link into a repeatable, one-tap transfer.
+Pairing happens once; both sides then remember each other.
+
+1. On the PC, open **Settings → Linked phone → Trusted devices**. The PC shows
+   a QR code and a six-digit code.
+2. On the phone, open **Trusted devices → Scan a new computer** and scan the
+   code. Check that the six digits match the PC screen, then confirm.
+3. The phone sends the encrypted envelope in the same scan. The PC asks once
+   before pairing and replacing an existing vault.
+
+Later transfers need no QR code:
+
+1. On the PC, open **Trusted devices** so it is listening.
+2. On the phone, open **Trusted devices** and tap **Send** on the paired PC.
+   The PC confirms unless **Accepts automatically** is enabled for that phone.
+
+Both devices must be on the same Wi-Fi or LAN. The receiver listens on an
+ephemeral TCP port and announces itself over UDP port `47823`; if discovery is
+blocked, the last known address is used. Allow the app through the Windows
+firewall if prompted.
+
+Pairing uses X25519, with the shared secret mixed through HKDF-SHA256 with a
+random 32-byte pairing secret that travels only inside the QR code. Both sides
+prove the derived keys with an HMAC transcript, and the six-digit code makes a
+replaced QR visible. Vault envelopes are sealed with AES-256-GCM under the
+derived trust key, with associated data binding the session and both device
+ids. Pairing codes are single-use and expire after five minutes; the receiver
+also rate-limits failed attempts and keeps a replay cache.
+
+The trust key is stored in `trusted_devices.bin`, sealed by DPAPI for the
+current Windows user or by a non-authentication AES-256-GCM key in the Android
+Keystore. It is deliberately outside the vault so a locked PC or a fresh setup
+can still receive. It can never decrypt the vault. Forget a device in the list
+to revoke its access immediately.
+
 ### Desktop shortcut
 
 After building, create a shortcut on the current user's desktop:
@@ -257,8 +298,9 @@ vectors for all three hash algorithms, `otpauth` parsing, password generation
 and strength, model round-trips, the full controller lifecycle (including
 Windows Hello, Android biometrics, PIN/pattern quick unlock, default login and
 backup restore), account sign-in, upload/download sync, conflict detection and
-resolution, accessibility preferences and spoken summaries, and the
-setup/unlock widget flows.
+resolution, accessibility preferences and spoken summaries, trusted-device
+pairing, sealed trust-store persistence, trusted transfer/replay rejection, and
+the setup/unlock widget flows.
 
 ## Limitations
 

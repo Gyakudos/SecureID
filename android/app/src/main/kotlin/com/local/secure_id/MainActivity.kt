@@ -34,6 +34,124 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result -> handleCall(call, result) }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, TRUST_CHANNEL)
+            .setMethodCallHandler { call, result -> handleTrustCall(call, result) }
+    }
+
+    /**
+     * Seals the local trusted-device list with a non-authentication Keystore
+     * key. Trust keys only authorise transport; they can never decrypt a vault.
+     */
+    private fun handleTrustCall(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "seal" -> {
+                val data = call.argument<ByteArray>("data")
+                if (data == null || data.isEmpty()) {
+                    result.error("bad_args", "Nothing to protect.", null)
+                    return
+                }
+                try {
+                    result.success(sealTrust(data))
+                } catch (exception: Exception) {
+                    Log.e(TAG, "Could not seal trusted devices", exception)
+                    result.error(
+                        "failed",
+                        "Could not protect the trusted-device list.",
+                        null,
+                    )
+                }
+            }
+            "unseal" -> {
+                val data = call.argument<ByteArray>("data")
+                if (data == null || data.isEmpty()) {
+                    result.error("bad_args", "The record is empty.", null)
+                    return
+                }
+                try {
+                    result.success(unsealTrust(data))
+                } catch (exception: Exception) {
+                    Log.e(TAG, "Could not unseal trusted devices", exception)
+                    result.error(
+                        "failed",
+                        "The trusted-device list could not be read on this phone.",
+                        null,
+                    )
+                }
+            }
+            "deleteKey" -> {
+                deleteTrustKey()
+                result.success(null)
+            }
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun sealTrust(plaintext: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateTrustKey())
+        cipher.updateAAD(TRUST_AAD)
+        val iv = cipher.iv
+        val ciphertext = cipher.doFinal(plaintext)
+        return ByteArray(iv.size + ciphertext.size).also { output ->
+            System.arraycopy(iv, 0, output, 0, iv.size)
+            System.arraycopy(ciphertext, 0, output, iv.size, ciphertext.size)
+        }
+    }
+
+    private fun unsealTrust(data: ByteArray): ByteArray {
+        if (data.size <= IV_LENGTH) {
+            throw IllegalArgumentException("The trusted-device record is incomplete.")
+        }
+        val key = getTrustKey()
+            ?: throw IllegalStateException("The trusted-device key is missing.")
+        val iv = data.copyOfRange(0, IV_LENGTH)
+        val ciphertext = data.copyOfRange(IV_LENGTH, data.size)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        cipher.updateAAD(TRUST_AAD)
+        return cipher.doFinal(ciphertext)
+    }
+
+    private fun getOrCreateTrustKey(): SecretKey {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        try {
+            val existing = keyStore.getEntry(TRUST_KEY_ALIAS, null)
+            if (existing is KeyStore.SecretKeyEntry) return existing.secretKey
+        } catch (_: UnrecoverableKeyException) {
+            keyStore.deleteEntry(TRUST_KEY_ALIAS)
+        }
+
+        val generator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            ANDROID_KEYSTORE,
+        )
+        val builder = KeyGenParameterSpec.Builder(
+            TRUST_KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .setUserAuthenticationRequired(false)
+        generator.init(builder.build())
+        return generator.generateKey()
+    }
+
+    private fun getTrustKey(): SecretKey? {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val entry = keyStore.getEntry(TRUST_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+        return entry?.secretKey
+    }
+
+    private fun deleteTrustKey() {
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (keyStore.containsAlias(TRUST_KEY_ALIAS)) {
+                keyStore.deleteEntry(TRUST_KEY_ALIAS)
+            }
+        } catch (_: Exception) {
+            // Nothing to delete.
+        }
     }
 
     private fun handleCall(call: MethodCall, result: MethodChannel.Result) {
@@ -354,10 +472,13 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val TAG = "SecureIDBiometric"
         private const val CHANNEL = "com.local.secure_id/biometric"
+        private const val TRUST_CHANNEL = "com.local.secure_id/trust_store"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val IV_LENGTH = 12
         private const val STATUS_OK = "ok"
+        private const val TRUST_KEY_ALIAS = "secureid_trust_store_v1"
         private val AAD = "secureid-pin-v1".toByteArray(Charsets.UTF_8)
+        private val TRUST_AAD = "secureid-trust-store-v1".toByteArray(Charsets.UTF_8)
     }
 }

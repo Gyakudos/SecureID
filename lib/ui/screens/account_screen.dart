@@ -8,7 +8,7 @@ import '../../util/date_format.dart';
 import '../theme.dart';
 import '../widgets/confirm_dialog.dart';
 import '../widgets/gradient_background.dart';
-import 'link_phone_screen.dart';
+import 'trusted_device_screen.dart';
 
 /// Sign-in and zero-knowledge vault sync.
 ///
@@ -499,8 +499,9 @@ class _AccountScreenState extends State<AccountScreen> {
         const SizedBox(height: 14),
         _LinkedDevicesCard(
           controller: controller,
-          onLinkPhone: () => Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => const LinkPhoneScreen())),
+          onLinkPhone: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const TrustedDeviceScreen()),
+          ),
           onRemove: _removeDevice,
         ),
         const SizedBox(height: 16),
@@ -652,7 +653,7 @@ class _LinkedDevicesCard extends StatelessWidget {
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.qr_code_2_rounded, color: kMint),
-            title: const Text('Link another phone'),
+            title: const Text('Trusted devices'),
             subtitle: const Text(
               'Send this encrypted vault over your local network. Works '
               'offline, even without an account.',

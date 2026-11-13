@@ -238,8 +238,9 @@ class _ImportScreenState extends State<ImportScreen> {
                       title: 'From a CSV file',
                       subtitle:
                           'Chrome, Edge, Safari, Firefox, Bitwarden, LastPass, '
-                          '1Password, Proton Pass, Dashlane, KeePass, NordPass '
-                          'and generic CSV exports are detected automatically.',
+                          '1Password, Proton Pass, Dashlane, KeePass, NordPass, '
+                          'Keeper, Enpass, RoboForm and generic CSV exports are '
+                          'detected automatically.',
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: <Widget>[
@@ -645,9 +646,9 @@ class _ExportGuide extends StatelessWidget {
             name: 'Other managers',
             steps:
                 'Export a CSV from Bitwarden, LastPass, 1Password, Dashlane, '
-                'KeePass or NordPass. SecureID detects the column layout and '
-                'imports folders, notes and authenticator secrets when they '
-                'are present.',
+                'KeePass, NordPass, Keeper, Enpass or RoboForm. SecureID '
+                'detects the column layout and imports folders, notes and '
+                'authenticator secrets when they are present.',
           ),
         ],
       ),

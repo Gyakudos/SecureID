@@ -14,6 +14,9 @@ enum ImportFormat {
   dashlane,
   keepass,
   nordPass,
+  keeper,
+  enpass,
+  roboForm,
   generic,
 }
 
@@ -29,6 +32,9 @@ extension ImportFormatLabel on ImportFormat {
     ImportFormat.dashlane => 'Dashlane',
     ImportFormat.keepass => 'KeePass',
     ImportFormat.nordPass => 'NordPass',
+    ImportFormat.keeper => 'Keeper',
+    ImportFormat.enpass => 'Enpass',
+    ImportFormat.roboForm => 'RoboForm',
     ImportFormat.generic => 'Generic CSV',
   };
 
@@ -49,6 +55,10 @@ extension ImportFormatLabel on ImportFormat {
     ImportFormat.dashlane => 'title, url, username, password, note, otpSecret',
     ImportFormat.keepass => 'Account, Login Name, Password, Web Site, Comments',
     ImportFormat.nordPass => 'name, url, username, password, note',
+    ImportFormat.keeper =>
+      'Folder, Title, Login, Password, Website Address, Notes',
+    ImportFormat.enpass => 'Title, Username, Password, URL, Notes, Category',
+    ImportFormat.roboForm => 'Name, Url, MatchUrl, Login, Pwd, Note, Folder',
     ImportFormat.generic =>
       'Recognised title, URL, username and password columns',
   };
@@ -182,6 +192,14 @@ class PasswordCsvImport {
     if (has('web site') || has('login name')) {
       return ImportFormat.keepass;
     }
+    if (has('website address') ||
+        has('custom fields') ||
+        has('shared folder')) {
+      return ImportFormat.keeper;
+    }
+    if (has('matchurl') || has('rffieldsv2') || has('rffields v2')) {
+      return ImportFormat.roboForm;
+    }
     if (has('httprealm') ||
         has('formactionorigin') ||
         has('timecreated') ||
@@ -190,6 +208,11 @@ class PasswordCsvImport {
     }
     if (has('cardholdername') || has('card number') || has('cvv')) {
       return ImportFormat.nordPass;
+    }
+    if (has('category') && has('title') && has('username')) {
+      // Enpass writes Title, Username, Password, URL, Notes, Category.
+      // Dashlane, which also has a category column, was matched above.
+      return ImportFormat.enpass;
     }
     if (has('type') && has('totp')) {
       // Proton Pass exports type, name, url, username, password, note, totp.
@@ -256,6 +279,7 @@ class PasswordCsvImport {
       'login username',
       'user',
       'login name',
+      'login',
       'email',
       'account name',
     ]);
@@ -263,12 +287,14 @@ class PasswordCsvImport {
       'password',
       'login password',
       'pass',
+      'pwd',
     ]);
     var url = value(const <String>[
       'url',
       'login uri',
       'web site',
       'website',
+      'website address',
       'uri',
       'login url',
       'site',
@@ -281,6 +307,11 @@ class PasswordCsvImport {
       'extra',
       'additional info',
     ]);
+    final customFields = value(const <String>['custom fields']);
+    if (customFields.isNotEmpty) {
+      final extra = 'Custom fields:\n$customFields';
+      notes = notes.isEmpty ? extra : '$notes\n\n$extra';
+    }
     final totpSecret = value(const <String>[
       'totp',
       'login totp',
@@ -486,7 +517,12 @@ class PasswordCsvImport {
       'notes',
       'note',
       'login name',
+      'login',
+      'pwd',
       'web site',
+      'website address',
+      'matchurl',
+      'category',
       'grouping',
       'folder',
       'totp',

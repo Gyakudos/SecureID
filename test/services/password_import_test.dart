@@ -191,6 +191,57 @@ void main() {
       expect(item.notes, 'LAN');
     });
 
+    test('reads a Keeper export with folders and custom fields', () {
+      final result = PasswordCsvImport.parse(
+        'Folder,Title,Login,Password,Website Address,Notes,Shared Folder,'
+        'Custom Fields\n'
+        'Work,Bank,me,pw,https://bank.example,note,Team,"PIN: 1234"\n',
+      );
+
+      expect(result.format, ImportFormat.keeper);
+      final item = result.items.single;
+      expect(item.title, 'Bank');
+      expect(item.username, 'me');
+      expect(item.password, 'pw');
+      expect(item.url, 'https://bank.example');
+      expect(item.tags, contains('Work'));
+      expect(item.notes, contains('note'));
+      expect(item.notes, contains('PIN: 1234'));
+    });
+
+    test('reads an Enpass export with categories', () {
+      final result = PasswordCsvImport.parse(
+        'Title,Username,Password,URL,Notes,Category\n'
+        'Mail,me,pw,https://mail.example,note,Personal\n',
+      );
+
+      expect(result.format, ImportFormat.enpass);
+      final item = result.items.single;
+      expect(item.title, 'Mail');
+      expect(item.username, 'me');
+      expect(item.password, 'pw');
+      expect(item.url, 'https://mail.example');
+      expect(item.notes, 'note');
+      expect(item.tags, contains('Personal'));
+    });
+
+    test('reads a RoboForm export', () {
+      final result = PasswordCsvImport.parse(
+        'Name,Url,MatchUrl,Login,Pwd,Note,Folder,RfFieldsV2\n'
+        'Shop,https://shop.example,https://shop.example,me,pw,note,'
+        'Shopping,\n',
+      );
+
+      expect(result.format, ImportFormat.roboForm);
+      final item = result.items.single;
+      expect(item.title, 'Shop');
+      expect(item.username, 'me');
+      expect(item.password, 'pw');
+      expect(item.url, 'https://shop.example');
+      expect(item.notes, 'note');
+      expect(item.tags, contains('Shopping'));
+    });
+
     test('falls back to generic columns', () {
       final result = PasswordCsvImport.parse(
         'Title,URL,Username,Password\n'

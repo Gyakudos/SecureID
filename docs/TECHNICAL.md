@@ -51,10 +51,11 @@ exported earlier.
   that has synced, with its platform and last-seen time.
 - **Encrypted backups** — export and restore the sealed vault file.
 - **Password import** — read CSV exports from Chrome, Edge, Safari, Firefox,
-  Bitwarden, LastPass, 1Password, Proton Pass, Dashlane, KeePass and NordPass.
-  On Windows, read Chrome, Edge, Brave, Vivaldi, Chromium and Opera profiles
-  directly and decrypt their saved passwords locally. Profiles protected by
-  app-bound encryption fall back to the browser's own CSV export.
+  Bitwarden, LastPass, 1Password, Proton Pass, Dashlane, KeePass, NordPass,
+  Keeper, Enpass and RoboForm. On Windows, read Chrome, Edge, Brave, Vivaldi,
+  Chromium and Opera profiles directly and decrypt their saved passwords
+  locally. Profiles protected by app-bound encryption fall back to the
+  browser's own CSV export.
 - **Vision accessibility** — larger text (up to 200%), a high-contrast theme,
   screen-reader labels, and spoken account summaries and details. The controls
   are available on the setup and unlock screens too, before the vault opens.
@@ -294,13 +295,15 @@ everything on the device:
   by Chrome and Edge (`name,url,username,password,note`), Safari and Apple
   Passwords (`Title,URL,Username,Password,Notes,OTPAuth`), Firefox, Bitwarden,
   LastPass, 1Password, Proton Pass (`type,name,url,username,password,note,
-  totp,vault`), Dashlane, KeePass and NordPass, and falls back to a generic
-  resolver for recognisable headings. Folders become tags, favourites
-  are preserved, `otpauth://` links and plain Base32 secrets become 2FA
-  entries, and duplicate rows are collapsed. Before importing, the screen shows
-  the detected format, the number of logins, skipped rows and any warnings.
-  Existing vault entries are skipped by default; the switch can import them
-  again instead.
+  totp,vault`), Dashlane, KeePass, NordPass, Keeper (`Folder,Title,Login,
+  Password,Website Address,Notes`), Enpass (`Title,Username,Password,URL,
+  Notes,Category`) and RoboForm (`Name,Url,MatchUrl,Login,Pwd,Note,Folder`),
+  and falls back to a generic resolver for recognisable headings. Folders
+  become tags, favourites are preserved, `otpauth://` links and plain Base32
+  secrets become 2FA entries, and duplicate rows are collapsed. Before
+  importing, the screen shows the detected format, the number of logins,
+  skipped rows and any warnings. Existing vault entries are skipped by default;
+  the switch can import them again instead.
 - **Direct browser import (Windows)** — SecureID looks for Chrome, Edge,
   Brave, Vivaldi, Chromium and Opera profiles, copies the SQLite `Login Data`
   file to a private temporary directory, and reads the `logins` table. The

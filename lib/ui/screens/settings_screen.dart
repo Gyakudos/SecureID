@@ -15,6 +15,7 @@ import '../widgets/secure_clipboard.dart';
 import '../widgets/strength_meter.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
+import 'import_screen.dart';
 import 'link_phone_screen.dart';
 import 'pair_device_screen.dart';
 import 'trusted_device_screen.dart';
@@ -794,6 +795,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             title: 'Backup',
                             icon: Icons.cloud_upload_outlined,
                             children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(
+                                  Icons.file_download_outlined,
+                                ),
+                                title: const Text('Import passwords'),
+                                subtitle: const Text(
+                                  'From a CSV export or a browser on this PC',
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const ImportScreen(),
+                                  ),
+                                ),
+                              ),
+                              const Divider(height: 1),
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.save_alt_rounded),

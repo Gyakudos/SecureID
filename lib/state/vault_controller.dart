@@ -1937,6 +1937,57 @@ class VaultController extends ChangeNotifier {
     await save();
   }
 
+  /// Adds imported logins, optionally skipping entries that already exist.
+  ///
+  /// A duplicate is the same title, username and URL host. The whole batch is
+  /// written in one save so a large import does not re-encrypt the vault for
+  /// every row. Returns the number of entries that were added.
+  Future<int> importItems(
+    Iterable<VaultItem> incoming, {
+    bool skipDuplicates = true,
+  }) async {
+    final data = _data;
+    if (data == null) return 0;
+    final keys = data.items.map(_importKey).toSet();
+    var added = 0;
+    for (final item in incoming) {
+      final key = _importKey(item);
+      if (skipDuplicates && keys.contains(key)) continue;
+      item.updatedAt = _now().toUtc();
+      data.items.add(item);
+      keys.add(key);
+      added++;
+    }
+    if (added == 0) return 0;
+    _safeNotify();
+    await save();
+    return added;
+  }
+
+  /// How many of [incoming] already exist in this vault.
+  int countImportDuplicates(Iterable<VaultItem> incoming) {
+    final data = _data;
+    if (data == null) return 0;
+    final keys = data.items.map(_importKey).toSet();
+    return incoming.where((item) => keys.contains(_importKey(item))).length;
+  }
+
+  static String _importKey(VaultItem item) {
+    final url = item.url.trim();
+    var host = url.toLowerCase();
+    if (url.isNotEmpty) {
+      var candidate = url;
+      if (!candidate.contains('://')) candidate = 'https://$candidate';
+      final uri = Uri.tryParse(candidate);
+      if (uri != null && uri.host.isNotEmpty) {
+        host = uri.host.toLowerCase();
+        if (host.startsWith('www.')) host = host.substring(4);
+      }
+    }
+    return '${item.title.trim().toLowerCase()}|'
+        '${item.username.trim().toLowerCase()}|$host';
+  }
+
   Future<void> deleteItem(String id) async {
     final data = _data;
     if (data == null) return;

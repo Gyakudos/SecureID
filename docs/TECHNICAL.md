@@ -50,6 +50,11 @@ exported earlier.
 - **Linked devices** — when signed in, the account screen lists every device
   that has synced, with its platform and last-seen time.
 - **Encrypted backups** — export and restore the sealed vault file.
+- **Password import** — read CSV exports from Chrome, Edge, Safari, Firefox,
+  Bitwarden, LastPass, 1Password, Dashlane, KeePass and NordPass. On Windows,
+  read Chrome, Edge, Brave, Vivaldi, Chromium and Opera profiles directly and
+  decrypt their saved passwords locally. Profiles protected by app-bound
+  encryption fall back to the browser's own CSV export.
 - **Vision accessibility** — larger text (up to 200%), a high-contrast theme,
   screen-reader labels, and spoken account summaries and details. The controls
   are available on the setup and unlock screens too, before the vault opens.
@@ -136,7 +141,7 @@ lib/
   config/       build-time Supabase configuration
   models/       vault items, passkeys, TOTP data, settings, device login
   security/     Argon2id + AES-GCM, TOTP, password generator, device unlock, quick unlock
-  services/     account auth, remote vault storage, LAN pairing, device registry, speech
+  services/     account auth, remote vault storage, LAN pairing, password import, device registry, speech
   state/        VaultController and the inherited VaultScope
   storage/      atomic file storage for the vault, sync state, identity, unlock records, login prefs and accessibility prefs
   ui/           screens, scanner and shared widgets
@@ -279,6 +284,41 @@ Keystore. It is deliberately outside the vault so a locked PC or a fresh setup
 can still receive. It can never decrypt the vault. Forget a device in the list
 to revoke its access immediately without affecting the other devices.
 
+### Importing passwords
+
+Open **Settings → Import passwords**. The screen offers two routes and keeps
+everything on the device:
+
+- **CSV file** — SecureID parses the file itself, including quoted fields,
+  embedded commas and multi-line notes. It recognises the column layouts used
+  by Chrome and Edge (`name,url,username,password,note`), Safari and Apple
+  Passwords (`Title,URL,Username,Password,Notes,OTPAuth`), Firefox, Bitwarden,
+  LastPass, 1Password, Dashlane, KeePass and NordPass, and falls back to a
+  generic resolver for recognisable headings. Folders become tags, favourites
+  are preserved, `otpauth://` links and plain Base32 secrets become 2FA
+  entries, and duplicate rows are collapsed. Before importing, the screen shows
+  the detected format, the number of logins, skipped rows and any warnings.
+  Existing vault entries are skipped by default; the switch can import them
+  again instead.
+- **Direct browser import (Windows)** — SecureID looks for Chrome, Edge,
+  Brave, Vivaldi, Chromium and Opera profiles, copies the SQLite `Login Data`
+  file to a private temporary directory, and reads the `logins` table. The
+  AES-256 key in `Local State` is unsealed with DPAPI for the current Windows
+  user, and each `v10`/`v11` value is decrypted with AES-256-GCM. The
+  temporary copy is deleted afterwards. Safari has no Windows build, so its
+  CSV export is the supported route there.
+
+Chrome and Edge can protect newer passwords with app-bound encryption (`v20`).
+Windows deliberately prevents another process from unwrapping that key, so
+SecureID counts those rows and tells you to use the browser's own CSV export
+instead of pretending the import succeeded. The same applies if the browser is
+holding an exclusive lock on the database; close it and retry.
+
+Imported entries are ordinary vault logins: they are encrypted with the vault
+key in the next save and inherit the same search, 2FA, clipboard and backup
+behaviour. Delete the source CSV afterwards because it contains plaintext
+passwords.
+
 ### Desktop shortcut
 
 After building, create a shortcut on the current user's desktop:
@@ -311,8 +351,9 @@ and strength, model round-trips, the full controller lifecycle (including
 Windows Hello, Android biometrics, PIN/pattern quick unlock, default login and
 backup restore), account sign-in, upload/download sync, conflict detection and
 resolution, accessibility preferences and spoken summaries, trusted-device
-pairing, sealed trust-store persistence, trusted transfer/replay rejection, and
-the setup/unlock widget flows.
+pairing, sealed trust-store persistence, trusted transfer/replay rejection,
+CSV format detection and quoting, Chromium password decryption and direct
+database import, import duplicate handling, and the setup/unlock widget flows.
 
 ## Limitations
 

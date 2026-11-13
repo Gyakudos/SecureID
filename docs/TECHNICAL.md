@@ -177,7 +177,7 @@ winget install --id NSIS.NSIS -e
 powershell -ExecutionPolicy Bypass -File installer\build_installer.ps1 -BuildFirst
 ```
 
-The result is `dist\SecureID-Setup-1.2.51.exe`. It is a per-user installer: it
+The result is `dist\SecureID-Setup-1.2.52.exe`. It is a per-user installer: it
 does **not** require administrator rights and installs to
 `%LOCALAPPDATA%\Programs\SecureID`. It bundles the Flutter engine and every
 runtime DLL, so the target machine does not need Flutter installed. It creates
@@ -233,25 +233,37 @@ so export a backup first if needed.
 ### Trusted devices
 
 Trusted devices turn the one-time link into a repeatable, one-tap transfer.
-Pairing happens once; both sides then remember each other.
+Pairing happens once; both sides then remember each other. The trusted list and
+the pairing flow are separate screens, so adding a phone never removes the
+devices already trusted.
 
-1. On the PC, open **Settings → Linked phone → Trusted devices**. The PC shows
-   a QR code and a six-digit code.
-2. On the phone, open **Trusted devices → Scan a new computer** and scan the
+1. On the PC, open **Settings → Linked devices → Pair a new Device**. The PC
+   shows a QR code and a six-digit code.
+2. On the phone, open **Trusted Devices → Pair a new Device** and scan the
    code. Check that the six digits match the PC screen, then confirm.
 3. The phone sends the encrypted envelope in the same scan. The PC asks once
    before pairing and replacing an existing vault.
 
-Later transfers need no QR code:
+Later transfers need no QR code, and either side can push an update:
 
-1. On the PC, open **Trusted devices** so it is listening.
-2. On the phone, open **Trusted devices** and tap **Send** on the paired PC.
-   The PC confirms unless **Accepts automatically** is enabled for that phone.
+1. Open **Trusted Devices** on the sending device.
+2. Tap **Send** on the paired device. If it is not already listening, open
+   **Receive updates** on the receiving device first. The receiver confirms
+   unless **Accepts automatically** is enabled for that device.
 
-Both devices must be on the same Wi-Fi or LAN. The receiver listens on an
-ephemeral TCP port and announces itself over UDP port `47823`; if discovery is
-blocked, the last known address is used. Allow the app through the Windows
-firewall if prompted.
+Pairing a vault that is already on this device keeps its local login settings.
+Windows Hello, the PIN/pattern quick unlock and the chosen default login keep
+working because the device-wrapped key still belongs to the same vault
+identity (salt and KDF parameters). Receiving a different vault removes the
+stale key record but keeps the platform device key and the login preferences;
+on Windows the record is recreated silently after the next master-password
+unlock, and Android asks for a biometric confirmation before re-enabling it.
+
+Both devices must be on the same Wi-Fi or LAN. The receiver prefers TCP port
+`47824` and announces itself over UDP port `47823`; if the port is busy it
+falls back to an ephemeral one, and discovery corrects the remembered address.
+If discovery is blocked, the last known stable address is used. Allow the app
+through the Windows firewall if prompted.
 
 Pairing uses X25519, with the shared secret mixed through HKDF-SHA256 with a
 random 32-byte pairing secret that travels only inside the QR code. Both sides
@@ -265,7 +277,7 @@ The trust key is stored in `trusted_devices.bin`, sealed by DPAPI for the
 current Windows user or by a non-authentication AES-256-GCM key in the Android
 Keystore. It is deliberately outside the vault so a locked PC or a fresh setup
 can still receive. It can never decrypt the vault. Forget a device in the list
-to revoke its access immediately.
+to revoke its access immediately without affecting the other devices.
 
 ### Desktop shortcut
 

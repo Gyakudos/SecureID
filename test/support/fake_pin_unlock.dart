@@ -9,6 +9,7 @@ class FakePinUnlock implements PinUnlock {
     this.available = true,
     this.cancel = false,
     this.failure,
+    this.supportsSilentRewrap = true,
   });
 
   @override
@@ -18,6 +19,9 @@ class FakePinUnlock implements PinUnlock {
   bool cancel;
   PinUnlockException? failure;
   bool cleared = false;
+
+  @override
+  final bool supportsSilentRewrap;
 
   @override
   String get featureName => 'Windows Hello';
@@ -49,6 +53,19 @@ class FakePinUnlock implements PinUnlock {
     required List<int> salt,
   }) async {
     _checkPrompt();
+    return _record(vaultKey, salt);
+  }
+
+  @override
+  Future<PinVaultRecord?> rewrapVaultKey({
+    required List<int> vaultKey,
+    required List<int> salt,
+  }) async {
+    if (!supportsSilentRewrap || !available) return null;
+    return _record(vaultKey, salt);
+  }
+
+  PinVaultRecord _record(List<int> vaultKey, List<int> salt) {
     return PinVaultRecord(
       vaultId: base64Encode(salt),
       wrappedKey: List<int>.of(vaultKey),

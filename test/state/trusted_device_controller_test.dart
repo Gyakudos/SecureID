@@ -90,6 +90,30 @@ void main() {
     expect(controller.trustedDevices, isEmpty);
   });
 
+  test('keeps every paired device when another is added', () async {
+    await controller.rememberTrustedDevice(_device('phone'));
+    await controller.rememberTrustedDevice(_device('tablet'));
+    await controller.rememberTrustedDevice(_device('laptop'));
+
+    expect(
+      controller.trustedDevices.map((device) => device.deviceId),
+      containsAll(<String>['phone', 'tablet', 'laptop']),
+    );
+    expect(controller.trustedDevices, hasLength(3));
+
+    await controller.forgetTrustedDevice('tablet');
+
+    expect(controller.trustedDevices, hasLength(2));
+    expect(
+      controller.trustedDevices.map((device) => device.deviceId),
+      containsAll(<String>['phone', 'laptop']),
+    );
+    expect(
+      (await trustStore.load(force: true)).map((device) => device.deviceId),
+      containsAll(<String>['phone', 'laptop']),
+    );
+  });
+
   test('resets the trust store', () async {
     await controller.rememberTrustedDevice(_device('a'));
     await controller.resetTrustedDevices();

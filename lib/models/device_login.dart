@@ -13,18 +13,29 @@ class DeviceLoginSettings {
   const DeviceLoginSettings({
     this.method = DefaultLoginMethod.password,
     this.style = PasswordStyle.pin,
+    this.pendingDeviceUnlock = false,
   });
 
   final DefaultLoginMethod method;
   final PasswordStyle style;
 
+  /// True when a device unlock record had to be removed because this device
+  /// received a different vault.
+  ///
+  /// The platform device key is deliberately kept, so the record can be
+  /// recreated after the next master-password unlock without resetting the
+  /// user's chosen login method.
+  final bool pendingDeviceUnlock;
+
   DeviceLoginSettings copyWith({
     DefaultLoginMethod? method,
     PasswordStyle? style,
+    bool? pendingDeviceUnlock,
   }) {
     return DeviceLoginSettings(
       method: method ?? this.method,
       style: style ?? this.style,
+      pendingDeviceUnlock: pendingDeviceUnlock ?? this.pendingDeviceUnlock,
     );
   }
 
@@ -33,6 +44,7 @@ class DeviceLoginSettings {
     'version': 1,
     'method': method.name,
     'style': style.name,
+    'pendingDeviceUnlock': pendingDeviceUnlock,
   };
 
   factory DeviceLoginSettings.fromJson(Map<String, dynamic> json) {
@@ -44,6 +56,10 @@ class DeviceLoginSettings {
       (value) => value.name == json['style'],
       orElse: () => PasswordStyle.pin,
     );
-    return DeviceLoginSettings(method: method, style: style);
+    return DeviceLoginSettings(
+      method: method,
+      style: style,
+      pendingDeviceUnlock: json['pendingDeviceUnlock'] as bool? ?? false,
+    );
   }
 }

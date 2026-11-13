@@ -16,6 +16,7 @@ import '../widgets/strength_meter.dart';
 import '../widgets/update_dialog.dart';
 import 'account_screen.dart';
 import 'link_phone_screen.dart';
+import 'pair_device_screen.dart';
 import 'trusted_device_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -289,16 +290,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                           const SizedBox(height: 14),
                           _Section(
-                            title: 'Linked phone',
+                            title: 'Linked devices',
                             icon: Icons.phonelink_ring_rounded,
                             children: [
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.shield_outlined),
-                                title: const Text('Trusted devices'),
+                                title: const Text('Trusted Devices'),
                                 subtitle: const Text(
-                                  'Pair once, then transfer the encrypted vault '
-                                  'with one tap. Works offline.',
+                                  'See every paired device, send the encrypted '
+                                  'vault, or revoke access.',
                                 ),
                                 trailing: const Icon(
                                   Icons.chevron_right_rounded,
@@ -306,6 +307,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 onTap: () => Navigator.of(context).push(
                                   MaterialPageRoute(
                                     builder: (_) => const TrustedDeviceScreen(),
+                                  ),
+                                ),
+                              ),
+                              const Divider(height: 1),
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.add_link_rounded),
+                                title: const Text('Pair a new Device'),
+                                subtitle: const Text(
+                                  'Add a phone or computer without removing '
+                                  'the devices already trusted.',
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const PairDeviceScreen(),
                                   ),
                                 ),
                               ),

@@ -13,7 +13,7 @@ import '../widgets/gradient_background.dart';
 import '../widgets/pattern_pad.dart';
 import '../widgets/pin_pad.dart';
 import 'account_screen.dart';
-import 'trusted_device_screen.dart';
+import 'pair_device_screen.dart';
 
 class UnlockScreen extends StatefulWidget {
   const UnlockScreen({super.key});
@@ -186,9 +186,8 @@ class _UnlockScreenState extends State<UnlockScreen> {
                           ? null
                           : () => Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => const TrustedDeviceScreen(
-                                  forceReceiver: true,
-                                ),
+                                builder: (_) =>
+                                    const PairDeviceScreen(receiveOnly: true),
                               ),
                             ),
                       icon: const Icon(Icons.phonelink_ring_rounded),

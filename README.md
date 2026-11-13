@@ -16,8 +16,8 @@ If you have any issues please contact me on my discord Bygone Era. At the bottom
 
 Prebuilt binaries are attached to the [latest release](https://github.com/Gyakudos/SecureID/releases/latest):
 
-- **Windows** - `SecureID-Setup-1.2.51.exe` (per-user installer, Flutter runtime included, no admin rights needed)
-- **Android** - `SecureID-1.2.51.apk`
+- **Windows** - `SecureID-Setup-1.2.52.exe` (per-user installer, Flutter runtime included, no admin rights needed)
+- **Android** - `SecureID-1.2.52.apk`
 
 ## Building from source
 

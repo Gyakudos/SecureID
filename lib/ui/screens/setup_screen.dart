@@ -9,7 +9,7 @@ import '../widgets/brand_mark.dart';
 import '../widgets/gradient_background.dart';
 import '../widgets/strength_meter.dart';
 import 'account_screen.dart';
-import 'trusted_device_screen.dart';
+import 'pair_device_screen.dart';
 
 class SetupScreen extends StatefulWidget {
   const SetupScreen({super.key});
@@ -208,9 +208,8 @@ class _SetupScreenState extends State<SetupScreen> {
                           ? null
                           : () => Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => const TrustedDeviceScreen(
-                                  forceReceiver: true,
-                                ),
+                                builder: (_) =>
+                                    const PairDeviceScreen(receiveOnly: true),
                               ),
                             ),
                       icon: const Icon(Icons.phonelink_ring_rounded),

@@ -206,6 +206,10 @@ class VaultController extends ChangeNotifier {
   /// The PIN or pattern style chosen for quick unlock.
   PasswordStyle get passwordStyle => _deviceLogin.style;
 
+  /// True when device unlock was paused because a different vault was
+  /// received. The preference and the platform device key are kept.
+  bool get pendingDeviceUnlock => _deviceLogin.pendingDeviceUnlock;
+
   /// True when this platform can offer a PIN or pattern quick unlock.
   bool get passwordStyleSupported => Platform.isAndroid;
 
@@ -847,6 +851,9 @@ class VaultController extends ChangeNotifier {
     try {
       final envelope = VaultEnvelope.decode(trimmed);
       await _saveQueue;
+      final previous = await _readCurrentEnvelope();
+      final sameVault = _sameVault(previous, envelope);
+      final hadPin = await _storage.pinExists();
       await _storage.write(trimmed);
 
       _autoLockTimer?.cancel();
@@ -862,15 +869,14 @@ class VaultController extends ChangeNotifier {
       _lastActivity = null;
       _lastSavedAt = null;
 
-      _pinEnabled = false;
-      try {
-        await _storage.deletePin();
-        await _pin.clearDeviceKey();
-      } catch (_) {
-        // A stale device unlock record is rejected on the next unlock.
+      if (sameVault) {
+        // Pairing usually exchanges the same vault. The device-wrapped key and
+        // the quick-unlock record still belong to this envelope, so Windows
+        // Hello, the PIN/pattern and the chosen login method keep working.
+        _pinEnabled = await _pinRecordMatches(envelope);
+      } else {
+        await _pauseLocalLoginRecords(hadPin: hadPin);
       }
-      await _clearQuickUnlockRecord();
-      await _resetDefaultLoginIfQuick();
 
       _syncState = null;
       _conflict = null;
@@ -1120,22 +1126,15 @@ class VaultController extends ChangeNotifier {
     final user = _user;
     if (user == null) return;
     final incoming = VaultEnvelope.decode(remote.envelope);
-    final current = _envelope;
-    final sameVault = current != null && current.vaultId == incoming.vaultId;
+    final current = _envelope ?? await _readCurrentEnvelope();
+    final sameVault = _sameVault(current, incoming);
     final key = _key;
 
     await _storage.write(remote.envelope);
 
     if (!sameVault) {
-      _pinEnabled = false;
-      try {
-        await _storage.deletePin();
-        await _pin.clearDeviceKey();
-      } catch (_) {
-        // A stale device unlock record is rejected on the next unlock.
-      }
-      await _clearQuickUnlockRecord();
-      await _resetDefaultLoginIfQuick();
+      final hadPin = await _storage.pinExists();
+      await _pauseLocalLoginRecords(hadPin: hadPin);
     }
 
     if (_status == VaultStatus.unlocked && sameVault && key != null) {
@@ -1331,6 +1330,7 @@ class VaultController extends ChangeNotifier {
       _scheduleAutoLock();
 
       await _reconcilePinAfterPasswordUnlock();
+      await _restorePendingDeviceUnlock();
       _scheduleAutoSync();
       return true;
     } on SecretBoxAuthenticationError {
@@ -1465,6 +1465,10 @@ class VaultController extends ChangeNotifier {
       if (opened) {
         _pinEnabled = true;
         _data!.settings.pinUnlockEnabled = true;
+        if (_deviceLogin.pendingDeviceUnlock) {
+          _deviceLogin = _deviceLogin.copyWith(pendingDeviceUnlock: false);
+          await _persistDeviceLogin();
+        }
       }
       return opened;
     } on PinUnlockCancelled {
@@ -1529,6 +1533,10 @@ class VaultController extends ChangeNotifier {
       _pinAvailable = true;
       _pinEnabled = true;
       _data!.settings.pinUnlockEnabled = true;
+      if (_deviceLogin.pendingDeviceUnlock) {
+        _deviceLogin = _deviceLogin.copyWith(pendingDeviceUnlock: false);
+        await _persistDeviceLogin();
+      }
       await save();
       return true;
     } on PinUnlockCancelled {
@@ -1548,6 +1556,10 @@ class VaultController extends ChangeNotifier {
 
   Future<void> disablePinUnlock() async {
     _pinEnabled = false;
+    if (_deviceLogin.pendingDeviceUnlock) {
+      _deviceLogin = _deviceLogin.copyWith(pendingDeviceUnlock: false);
+      await _persistDeviceLogin();
+    }
     try {
       await _storage.deletePin();
       await _pin.clearDeviceKey();
@@ -1730,6 +1742,97 @@ class VaultController extends ChangeNotifier {
     }
   }
 
+  /// True when a device-unlock record exists for [envelope].
+  Future<bool> _pinRecordMatches(VaultEnvelope envelope) async {
+    try {
+      if (!await _storage.pinExists()) return false;
+      final text = await _storage.readPin();
+      if (text == null) return false;
+      return PinVaultRecord.decode(text).vaultId == envelope.vaultId;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// True when both envelopes are the same vault, so a device-wrapped key and
+  /// quick-unlock record remain valid across a transfer.
+  bool _sameVault(VaultEnvelope? a, VaultEnvelope? b) {
+    if (a == null || b == null) return false;
+    return a.vaultId == b.vaultId &&
+        a.memory == b.memory &&
+        a.iterations == b.iterations &&
+        a.parallelism == b.parallelism &&
+        a.hashLength == b.hashLength;
+  }
+
+  /// Reads the vault currently on disk, if it is valid.
+  Future<VaultEnvelope?> _readCurrentEnvelope() async {
+    try {
+      final text = await _storage.read();
+      if (text == null || text.trim().isEmpty) return null;
+      return VaultEnvelope.decode(text);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Keeps this device's login preferences when a different vault replaces the
+  /// current one.
+  ///
+  /// A PIN/pattern record or device-unlock record wraps the old vault key, so
+  /// it can never open the new vault and is removed. The platform device key
+  /// is intentionally kept: Windows can silently rewrap the new key after the
+  /// next master-password unlock, and Android can reuse it after a biometric
+  /// confirmation. The chosen method and password style are never reset.
+  Future<void> _pauseLocalLoginRecords({required bool hadPin}) async {
+    _pinEnabled = false;
+    try {
+      await _storage.deletePin();
+    } catch (_) {
+      // A stale record is rejected by the vault-id check anyway.
+    }
+    await _clearQuickUnlockRecord();
+    if (hadPin) {
+      _deviceLogin = _deviceLogin.copyWith(pendingDeviceUnlock: true);
+      await _persistDeviceLogin();
+    }
+  }
+
+  /// Recreates the device-unlock record for the current vault after a password
+  /// unlock, when the platform can do it without another prompt.
+  Future<void> _restorePendingDeviceUnlock() async {
+    if (!_deviceLogin.pendingDeviceUnlock) return;
+    if (_status != VaultStatus.unlocked ||
+        _keyBytes == null ||
+        _envelope == null ||
+        !_pin.supportsSilentRewrap) {
+      return;
+    }
+    try {
+      final record = await _pin.rewrapVaultKey(
+        vaultKey: _keyBytes!,
+        salt: _envelope!.salt,
+      );
+      if (record == null) return;
+      await _storage.writePin(record.encode());
+      _pinEnabled = true;
+      _data?.settings.pinUnlockEnabled = true;
+      _deviceLogin = _deviceLogin.copyWith(pendingDeviceUnlock: false);
+      await _persistDeviceLogin();
+      await save();
+    } catch (_) {
+      // Keep the pending flag so Settings can offer a fresh enrolment.
+    }
+  }
+
+  /// Re-enables device unlock after a vault replacement that required a fresh
+  /// platform confirmation (Android biometrics).
+  Future<bool> resumeDeviceUnlock() async {
+    if (!_deviceLogin.pendingDeviceUnlock) return false;
+    if (_status != VaultStatus.unlocked) return false;
+    return enablePinUnlock();
+  }
+
   Future<void> _clearQuickUnlockRecord() async {
     _quickRecord = null;
     try {
@@ -1907,10 +2010,15 @@ class VaultController extends ChangeNotifier {
 
       if (_pinEnabled) {
         try {
-          final record = await _pin.wrapVaultKey(
-            vaultKey: _keyBytes!,
-            salt: sealed.envelope.salt,
-          );
+          final record =
+              await _pin.rewrapVaultKey(
+                vaultKey: _keyBytes!,
+                salt: sealed.envelope.salt,
+              ) ??
+              await _pin.wrapVaultKey(
+                vaultKey: _keyBytes!,
+                salt: sealed.envelope.salt,
+              );
           await _storage.writePin(record.encode());
         } catch (_) {
           _pinEnabled = false;
@@ -1976,12 +2084,17 @@ class VaultController extends ChangeNotifier {
       }
       final data = VaultData.fromJson(decoded);
 
+      final previous = await _readCurrentEnvelope();
+      final sameVault = _sameVault(previous, envelope);
+      final hadPin = await _storage.pinExists();
       await _storage.write(contents);
-      await _storage.deletePin();
-      _pinEnabled = false;
-      data.settings.pinUnlockEnabled = false;
-      await _clearQuickUnlockRecord();
-      await _resetDefaultLoginIfQuick();
+      if (sameVault) {
+        _pinEnabled = await _pinRecordMatches(envelope);
+        data.settings.pinUnlockEnabled = _pinEnabled;
+      } else {
+        await _pauseLocalLoginRecords(hadPin: hadPin);
+        data.settings.pinUnlockEnabled = false;
+      }
 
       _data = data;
       _envelope = envelope;
@@ -1991,6 +2104,7 @@ class VaultController extends ChangeNotifier {
       _lastActivity = _now();
       _lastSavedAt = _now();
       _scheduleAutoLock();
+      await _restorePendingDeviceUnlock();
       await save();
       return true;
     } on SecretBoxAuthenticationError {

@@ -108,6 +108,9 @@ void main() {
     expect(received, envelope);
     expect(remembered, hasLength(1));
     expect(remembered.single.deviceId, 'phone-1');
+    // The sender does not listen while pushing, so the remembered address uses
+    // the receiver's stable port, not the ephemeral one this test bound.
+    expect(remembered.single.lastAddress, '127.0.0.1:$kTrustedReceiverPort');
     expect(confirmations, 1);
     expect(receiver.wasUsed, isTrue);
 

@@ -23,14 +23,25 @@ void main() {
     const settings = DeviceLoginSettings(
       method: DefaultLoginMethod.passwordStyle,
       style: PasswordStyle.pattern,
+      pendingDeviceUnlock: true,
     );
     final json = settings.toJson();
     expect(json['format'], 'secureid-login');
     expect(json['version'], 1);
+    expect(json['pendingDeviceUnlock'], isTrue);
 
     final restored = DeviceLoginSettings.fromJson(json);
     expect(restored.method, settings.method);
     expect(restored.style, settings.style);
+    expect(restored.pendingDeviceUnlock, isTrue);
+  });
+
+  test('defaults pending device unlock to false', () {
+    final restored = DeviceLoginSettings.fromJson({
+      'method': 'password',
+      'style': 'pin',
+    });
+    expect(restored.pendingDeviceUnlock, isFalse);
   });
 
   test('falls back to safe values for unknown names', () {

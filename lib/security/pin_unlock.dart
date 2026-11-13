@@ -95,6 +95,23 @@ abstract class PinUnlock {
     required List<int> salt,
   });
 
+  /// True when [rewrapVaultKey] can run without showing a platform prompt.
+  ///
+  /// Windows can reuse its DPAPI-protected device key directly. Android keeps
+  /// the device key inside the Keystore with authentication required, so it
+  /// needs a fresh biometric prompt.
+  bool get supportsSilentRewrap => false;
+
+  /// Wraps [vaultKey] with the existing device key without prompting.
+  ///
+  /// Returns null when this platform needs a prompt or no device key exists.
+  /// The key material is never recreated here, because replacing a lost device
+  /// key would make an existing record permanently undecryptable.
+  Future<PinVaultRecord?> rewrapVaultKey({
+    required List<int> vaultKey,
+    required List<int> salt,
+  }) async => null;
+
   /// Prompts the user, then unwraps the vault key.
   Future<List<int>> unwrapVaultKey(PinVaultRecord record);
 
@@ -206,6 +223,27 @@ class PinUnlockService implements PinUnlock {
   }) async {
     await _authenticateOrThrow();
     final deviceKey = await _ensureDeviceKey();
+    return _seal(vaultKey, salt, deviceKey);
+  }
+
+  @override
+  bool get supportsSilentRewrap => true;
+
+  @override
+  Future<PinVaultRecord?> rewrapVaultKey({
+    required List<int> vaultKey,
+    required List<int> salt,
+  }) async {
+    final deviceKey = await _readDeviceKey();
+    if (deviceKey == null) return null;
+    return _seal(vaultKey, salt, deviceKey);
+  }
+
+  Future<PinVaultRecord> _seal(
+    List<int> vaultKey,
+    List<int> salt,
+    List<int> deviceKey,
+  ) async {
     final box = await _cipher.encrypt(
       vaultKey,
       secretKey: SecretKey(deviceKey),

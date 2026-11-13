@@ -113,6 +113,17 @@ class AndroidBiometricUnlock implements PinUnlock {
     return PinVaultRecord(vaultId: base64Encode(salt), wrappedKey: wrapped);
   }
 
+  /// The Keystore key requires a fresh biometric prompt, so the vault key
+  /// cannot be rewrapped silently after receiving a different vault.
+  @override
+  bool get supportsSilentRewrap => false;
+
+  @override
+  Future<PinVaultRecord?> rewrapVaultKey({
+    required List<int> vaultKey,
+    required List<int> salt,
+  }) async => null;
+
   @override
   Future<List<int>> unwrapVaultKey(PinVaultRecord record) {
     return _invokeBytes('unwrap', {

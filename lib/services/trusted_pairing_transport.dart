@@ -762,8 +762,10 @@ class TrustedPairingReceiver {
   String _requestAddress(HttpRequest request) {
     final ip = request.connectionInfo?.remoteAddress.address ?? '';
     if (ip.isEmpty) return _address;
-    final server = _server;
-    return server == null ? ip : '$ip:${server.port}';
+    // The sender does not listen while pushing, so remember the stable port
+    // its receiver prefers. Discovery can still correct this when the port is
+    // busy and the other device falls back to an ephemeral one.
+    return '$ip:$kTrustedReceiverPort';
   }
 
   bool _isVaultEnvelope(String envelope) {

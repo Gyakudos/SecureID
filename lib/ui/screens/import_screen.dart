@@ -238,8 +238,8 @@ class _ImportScreenState extends State<ImportScreen> {
                       title: 'From a CSV file',
                       subtitle:
                           'Chrome, Edge, Safari, Firefox, Bitwarden, LastPass, '
-                          '1Password, Dashlane, KeePass, NordPass and generic '
-                          'CSV exports are detected automatically.',
+                          '1Password, Proton Pass, Dashlane, KeePass, NordPass '
+                          'and generic CSV exports are detected automatically.',
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: <Widget>[
@@ -632,6 +632,14 @@ class _ExportGuide extends StatelessWidget {
             steps:
                 'Open about:logins, open the menu, choose "Export logins…", '
                 'and pick the CSV file above.',
+          ),
+          _GuideStep(
+            name: 'Proton Pass',
+            steps:
+                'Open the Proton Pass browser extension or Windows app, go '
+                'to Settings → Export, choose CSV and turn off encryption, '
+                'then pick the file above. Vaults become tags and TOTP '
+                'secrets are kept.',
           ),
           _GuideStep(
             name: 'Other managers',

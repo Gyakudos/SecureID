@@ -128,6 +128,40 @@ void main() {
       expect(item.notes, 'note');
     });
 
+    test('reads a Proton Pass export with vaults, TOTP and cards', () {
+      final result = PasswordCsvImport.parse(
+        'type,name,url,username,password,note,totp,vault\n'
+        'login,GitHub,https://github.com,octocat,pw,note,'
+        'JBSWY3DPEHPK3PXP,Work\n'
+        'creditCard,Visa,,,,,,Personal\n'
+        'alias,Shopping alias,,,,,,Personal\n',
+      );
+
+      expect(result.format, ImportFormat.protonPass);
+      expect(result.count, 2);
+      expect(result.skippedRows, 1);
+      final item = result.items.first;
+      expect(item.title, 'GitHub');
+      expect(item.username, 'octocat');
+      expect(item.password, 'pw');
+      expect(item.notes, 'note');
+      expect(item.tags, contains('Work'));
+      expect(item.totp, isNotNull);
+      expect(item.totp!.secret, 'JBSWY3DPEHPK3PXP');
+      expect(result.items.last.title, 'Shopping alias');
+    });
+
+    test('reads a Proton Pass export without a vault column', () {
+      final result = PasswordCsvImport.parse(
+        'type,name,url,username,password,note,totp\n'
+        'login,Mail,https://mail.example,me,pw,,\n',
+      );
+
+      expect(result.format, ImportFormat.protonPass);
+      expect(result.items.single.title, 'Mail');
+      expect(result.items.single.url, 'https://mail.example');
+    });
+
     test('reads a Dashlane export', () {
       final result = PasswordCsvImport.parse(
         'username,username2,username3,title,password,note,url,category,'

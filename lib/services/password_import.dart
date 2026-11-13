@@ -10,6 +10,7 @@ enum ImportFormat {
   bitwarden,
   lastPass,
   onePassword,
+  protonPass,
   dashlane,
   keepass,
   nordPass,
@@ -24,6 +25,7 @@ extension ImportFormatLabel on ImportFormat {
     ImportFormat.bitwarden => 'Bitwarden',
     ImportFormat.lastPass => 'LastPass',
     ImportFormat.onePassword => '1Password',
+    ImportFormat.protonPass => 'Proton Pass',
     ImportFormat.dashlane => 'Dashlane',
     ImportFormat.keepass => 'KeePass',
     ImportFormat.nordPass => 'NordPass',
@@ -42,6 +44,8 @@ extension ImportFormatLabel on ImportFormat {
       'url, username, password, totp, extra, name, grouping',
     ImportFormat.onePassword =>
       'Title, Url, Username, Password, OTPAuth, Favorite, Tags, Notes',
+    ImportFormat.protonPass =>
+      'type, name, url, username, password, note, totp, vault',
     ImportFormat.dashlane => 'title, url, username, password, note, otpSecret',
     ImportFormat.keepass => 'Account, Login Name, Password, Web Site, Comments',
     ImportFormat.nordPass => 'name, url, username, password, note',
@@ -187,6 +191,11 @@ class PasswordCsvImport {
     if (has('cardholdername') || has('card number') || has('cvv')) {
       return ImportFormat.nordPass;
     }
+    if (has('type') && has('totp')) {
+      // Proton Pass exports type, name, url, username, password, note, totp.
+      // Bitwarden, LastPass and Dashlane were already matched above.
+      return ImportFormat.protonPass;
+    }
     if (has('title') && has('url') && has('username') && has('password')) {
       // 1Password was handled above; the remaining Title/URL shape is the
       // Safari (and Apple Passwords) export.
@@ -226,7 +235,15 @@ class PasswordCsvImport {
     }
 
     final type = value(const <String>['type']).toLowerCase();
-    if (type == 'card' || type == 'identity') return null;
+    // Proton Pass and Bitwarden mark cards and identities with a type column.
+    // They hold no login credentials, so they are skipped rather than turned
+    // into logins with an empty password.
+    if (type == 'card' ||
+        type == 'creditcard' ||
+        type == 'credit card' ||
+        type == 'identity') {
+      return null;
+    }
 
     final title = value(const <String>[
       'name',
@@ -281,6 +298,7 @@ class PasswordCsvImport {
       'group',
       'category',
       'collection',
+      'vault',
       'tags',
       'tag',
     ]);

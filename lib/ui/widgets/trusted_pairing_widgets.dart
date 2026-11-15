@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../security/trusted_pairing.dart';
@@ -230,11 +231,51 @@ class TrustedPairingCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
-                '${offer.address} · expires in $minutes:$seconds',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Text(
+                      '${offer.manualAddress} · expires in $minutes:$seconds',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Copy pairing code',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: offer.link.encode()),
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Pairing code copied. Paste it on the other device.',
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.copy_rounded, size: 18),
+                  ),
+                ],
               ),
+              if (offer.addresses.length > 1) ...[
+                const SizedBox(height: 2),
+                Text(
+                  'Other addresses: '
+                  '${offer.addresses.where((address) => address != offer.address).map((address) => '$address:${offer.link.endpoint.port}').join(', ')}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 11.5,
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               TrustedStatusPill(
                 icon: Icons.wifi_tethering_rounded,

@@ -60,6 +60,21 @@ class TrustPairingLink {
     },
   );
 
+  /// Returns a copy of this link with a corrected endpoint.
+  ///
+  /// A device with several network adapters can put the wrong address in the
+  /// QR code. The keys and session stay the same, so only the address changes.
+  TrustPairingLink copyWith({Uri? endpoint}) => TrustPairingLink(
+    endpoint: endpoint ?? this.endpoint,
+    sessionId: sessionId,
+    receiverPublicKey: receiverPublicKey,
+    pairingSecret: pairingSecret,
+    deviceId: deviceId,
+    deviceName: deviceName,
+    platform: platform,
+    expiresAt: expiresAt,
+  );
+
   String encode() => toUri().toString();
 
   /// Parses a scanned `secureid://trust?...` code.
@@ -110,13 +125,23 @@ class TrustPairingOffer {
     required this.link,
     required this.address,
     required this.expiresAt,
+    this.addresses = const [],
   });
 
   final TrustPairingLink link;
+
+  /// The address written into the QR code.
   final String address;
+
+  /// Every local address this device can be reached on, best first.
+  final List<String> addresses;
+
   final DateTime expiresAt;
 
   String get code => link.displayCode;
+
+  /// The `host:port` text another device can type manually.
+  String get manualAddress => '$address:${link.endpoint.port}';
 }
 
 /// The keys derived from one successful X25519 exchange.

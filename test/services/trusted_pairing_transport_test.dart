@@ -322,4 +322,151 @@ void main() {
     });
     expect(hello['status'], HttpStatus.notFound);
   });
+
+  group('LAN discovery', () {
+    test('reads a typed ip or ip:port', () {
+      expect(
+        parseLanEndpoint('192.168.1.20')?.toString(),
+        'http://192.168.1.20:$kTrustedReceiverPort',
+      );
+      expect(
+        parseLanEndpoint(' 192.168.1.20:47900/ ')?.toString(),
+        'http://192.168.1.20:47900',
+      );
+      expect(
+        parseLanEndpoint('http://10.0.0.5:47830')?.toString(),
+        'http://10.0.0.5:47830',
+      );
+      expect(
+        parseLanEndpoint('localhost')?.toString(),
+        'http://127.0.0.1:$kTrustedReceiverPort',
+      );
+      expect(parseLanEndpoint(''), isNull);
+      expect(parseLanEndpoint('not an address'), isNull);
+      expect(parseLanEndpoint('192.168.1.20:0'), isNull);
+      expect(parseLanEndpoint('192.168.1.20:99999'), isNull);
+      expect(parseLanEndpoint('https://192.168.1.20'), isNull);
+      expect(parseLanEndpoint('::1'), isNull);
+    });
+
+    test('falls back to the next stable port when one is busy', () async {
+      HttpServer? blocker;
+      try {
+        blocker = await HttpServer.bind(
+          InternetAddress.anyIPv4,
+          kTrustedReceiverPort,
+        );
+      } on SocketException {
+        // Something else already owns the port; the fallback still applies.
+      }
+      final receiver = TrustedPairingReceiver();
+      addTearDown(() async {
+        await receiver.stop();
+        await blocker?.close(force: true);
+      });
+
+      await receiver.start(
+        deviceId: 'pc-1',
+        deviceName: 'Test PC',
+        platform: 'windows',
+        findTrusted: find,
+        remember: remember,
+        onEnvelope: (envelope, sender) async => true,
+        bindAddress: InternetAddress.loopbackIPv4,
+        addressOverride: '127.0.0.1',
+        broadcast: false,
+      );
+
+      expect(kTrustedReceiverPorts, contains(receiver.port));
+      if (blocker != null) {
+        expect(receiver.port, isNot(kTrustedReceiverPort));
+      }
+    });
+
+    test('answers a unicast probe with its address and port', () async {
+      const discoveryPort = 47991;
+      final receiver = TrustedPairingReceiver();
+      addTearDown(receiver.stop);
+      final offer = await receiver.start(
+        deviceId: 'pc-1',
+        deviceName: 'Test PC',
+        platform: 'windows',
+        findTrusted: find,
+        remember: remember,
+        onEnvelope: (envelope, sender) async => true,
+        bindAddress: InternetAddress.anyIPv4,
+        addressOverride: '127.0.0.1',
+        port: 0,
+        discoveryPort: discoveryPort,
+      );
+
+      final sender = TrustedPairingSender(
+        discoveryPort: discoveryPort,
+        timeout: const Duration(seconds: 5),
+      );
+      final found = await sender.discover(
+        timeout: const Duration(seconds: 3),
+        deviceIds: {'pc-1'},
+        addresses: {'127.0.0.1'},
+      );
+
+      expect(found, hasLength(1));
+      expect(found.single.deviceId, 'pc-1');
+      expect(found.single.address, isNotEmpty);
+      expect(found.single.port, offer.link.endpoint.port);
+    });
+
+    test(
+      'rediscovers a receiver when the remembered address is stale',
+      () async {
+        const discoveryPort = 47992;
+        final envelope = await buildEnvelope();
+        final receiver = TrustedPairingReceiver();
+        addTearDown(receiver.stop);
+        final offer = await receiver.start(
+          deviceId: 'pc-1',
+          deviceName: 'Test PC',
+          platform: 'windows',
+          findTrusted: find,
+          remember: remember,
+          onEnvelope: (envelope, sender) async {
+            received = envelope;
+            return true;
+          },
+          onConfirm: (device, pairing) async {
+            confirmations++;
+            return true;
+          },
+          bindAddress: InternetAddress.anyIPv4,
+          addressOverride: '127.0.0.1',
+          port: 0,
+          discoveryPort: discoveryPort,
+        );
+
+        final sender = TrustedPairingSender(
+          discoveryPort: discoveryPort,
+          timeout: const Duration(seconds: 10),
+        );
+        final paired = await sender.pairAndPush(
+          link: offer.link,
+          senderId: 'phone-1',
+          senderName: 'Test Phone',
+          senderPlatform: 'android',
+          envelope: envelope,
+        );
+        received = '';
+
+        final updated = await sender.sendToTrusted(
+          device: paired.copyWith(lastAddress: '127.0.0.1:1'),
+          senderId: 'phone-1',
+          senderName: 'Test Phone',
+          senderPlatform: 'android',
+          envelope: envelope,
+        );
+
+        expect(received, envelope);
+        expect(updated.lastAddress, endsWith(':${offer.link.endpoint.port}'));
+      },
+    );
+  });
 }

@@ -44,6 +44,21 @@ void main() {
       );
     });
 
+    test('copyWith changes only the endpoint', () {
+      final link = buildLink();
+      final fixed = link.copyWith(endpoint: Uri.parse('http://10.0.0.9:47824'));
+
+      expect(fixed.endpoint.toString(), 'http://10.0.0.9:47824');
+      expect(fixed.sessionId, link.sessionId);
+      expect(fixed.receiverPublicKey, link.receiverPublicKey);
+      expect(fixed.pairingSecret, link.pairingSecret);
+      expect(fixed.deviceId, link.deviceId);
+      expect(fixed.deviceName, link.deviceName);
+      expect(fixed.platform, link.platform);
+      expect(fixed.expiresAt, link.expiresAt);
+      expect(fixed.displayCode, link.displayCode);
+    });
+
     test('display code is six digits and depends on the session', () {
       final link = buildLink();
       expect(link.displayCode, matches(RegExp(r'^\d{6}$')));

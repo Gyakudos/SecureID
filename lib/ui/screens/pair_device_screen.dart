@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../models/trusted_device.dart';
 import '../../security/trusted_pairing.dart';
@@ -47,6 +48,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
 
   bool _pairing = false;
   String? _pairError;
+  TrustPairingLink? _scannedLink;
 
   bool get _isPhone => Platform.isAndroid;
   bool get _receiverMode => !_isPhone || widget.receiveOnly || _showReceiver;
@@ -200,14 +202,6 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
   }
 
   Future<void> _scanAndPair() async {
-    final controller = VaultScope.read(context);
-    if (controller.status == VaultStatus.needsSetup) {
-      setState(() {
-        _pairError = 'Create or receive a vault on this device before pairing.';
-      });
-      return;
-    }
-
     final scanned = await Navigator.of(context).push<String>(
       MaterialPageRoute(
         builder: (_) => const RawQrScannerScreen(
@@ -217,8 +211,26 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       ),
     );
     if (!mounted || scanned == null) return;
+    await _acceptCode(scanned);
+  }
 
-    final link = TrustPairingLink.tryParse(scanned);
+  Future<void> _pasteCode() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      setState(() {
+        _pairError =
+            'The clipboard is empty. On the computer tap the copy button under '
+            'the pairing code first.';
+      });
+      return;
+    }
+    await _acceptCode(text);
+  }
+
+  Future<void> _acceptCode(String raw) async {
+    final link = TrustPairingLink.tryParse(raw);
     if (link == null) {
       setState(() {
         _pairError =
@@ -227,7 +239,25 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       });
       return;
     }
-    if (DateTime.now().isAfter(link.expiresAt)) {
+    setState(() {
+      _scannedLink = link;
+      _pairError = null;
+    });
+    await _pairWithLink(link);
+  }
+
+  Future<void> _pairWithLink(
+    TrustPairingLink link, {
+    bool confirm = true,
+  }) async {
+    final controller = VaultScope.read(context);
+    if (controller.status == VaultStatus.needsSetup) {
+      setState(() {
+        _pairError = 'Create or receive a vault on this device before pairing.';
+      });
+      return;
+    }
+    if (DateTime.now().isAfter(link.expiresAt.toLocal())) {
       setState(() {
         _pairError =
             'That pairing code expired. Show a new code on the computer.';
@@ -235,41 +265,51 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       return;
     }
 
-    final proceed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Pair with ${link.deviceName}?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Check that this code matches the one on the computer screen.',
-            ),
-            const SizedBox(height: 16),
-            Text(
-              link.displayCode,
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                letterSpacing: 8,
-                fontWeight: FontWeight.w700,
-                color: kMint,
+    if (confirm) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Pair with ${link.deviceName}?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Check that this code matches the one on the computer screen.',
               ),
+              const SizedBox(height: 16),
+              Text(
+                link.displayCode,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  letterSpacing: 8,
+                  fontWeight: FontWeight.w700,
+                  color: kMint,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Sending to ${link.endpoint.authority}',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Pair and send'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Pair and send'),
-          ),
-        ],
-      ),
-    );
-    if (proceed != true || !mounted) return;
+      );
+      if (proceed != true || !mounted) return;
+    }
 
     final identity = await controller.ensureDeviceIdentity();
     final envelope = await controller.readEncryptedEnvelope();
@@ -319,12 +359,29 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     }
   }
 
+  Future<void> _fixAddress() async {
+    final link = _scannedLink;
+    if (link == null) return;
+    final endpoint = await showDialog<Uri>(
+      context: context,
+      builder: (_) => _AddressDialog(initial: link.endpoint.authority),
+    );
+    if (endpoint == null || !mounted) return;
+    final fixed = link.copyWith(endpoint: endpoint);
+    setState(() {
+      _scannedLink = fixed;
+      _pairError = null;
+    });
+    await _pairWithLink(fixed, confirm: false);
+  }
+
   Future<void> _pairAnother() async {
     setState(() {
       _pairedWith = null;
       _pairedBySending = false;
       _pairError = null;
       _receiveError = null;
+      _scannedLink = null;
     });
     if (_receiverMode) {
       await _startReceiver();
@@ -348,6 +405,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       _showReceiver = false;
       _offer = null;
       _receiveError = null;
+      _scannedLink = null;
     });
   }
 
@@ -512,7 +570,25 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
           color: kDanger,
           message: _pairError!,
         ),
+        if (_scannedLink != null) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _pairing ? null : _fixAddress,
+            icon: const Icon(Icons.edit_location_alt_rounded),
+            label: const Text('Try a different computer address'),
+          ),
+        ],
         const SizedBox(height: 12),
+      ],
+      if (_scannedLink != null && _pairError == null) ...[
+        Text(
+          'Sending to ${_scannedLink!.endpoint.authority}',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12.5,
+          ),
+        ),
+        const SizedBox(height: 8),
       ],
       FilledButton.icon(
         onPressed: _pairing ? null : _scanAndPair,
@@ -524,6 +600,12 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
               )
             : const Icon(Icons.qr_code_scanner_rounded),
         label: Text(_pairing ? 'Pairing…' : 'Scan the computer code'),
+      ),
+      const SizedBox(height: 12),
+      OutlinedButton.icon(
+        onPressed: _pairing ? null : _pasteCode,
+        icon: const Icon(Icons.content_paste_rounded),
+        label: const Text('Paste a code instead'),
       ),
       const SizedBox(height: 12),
       OutlinedButton.icon(
@@ -542,6 +624,89 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
           height: 1.45,
         ),
       ),
+      if (_scannedLink != null) ...[
+        const SizedBox(height: 6),
+        Text(
+          'If the computer has more than one network adapter, use "Try a '
+          'different computer address" to enter the Wi-Fi address it shows.',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+            height: 1.4,
+          ),
+        ),
+      ],
     ];
+  }
+}
+
+/// Asks for the computer's `ip` or `ip:port` after a QR code carried the wrong
+/// address (for example a VPN adapter or a second Ethernet port).
+class _AddressDialog extends StatefulWidget {
+  const _AddressDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  State<_AddressDialog> createState() => _AddressDialogState();
+}
+
+class _AddressDialogState extends State<_AddressDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final endpoint = parseLanEndpoint(_controller.text);
+    if (endpoint == null) {
+      setState(() {
+        _error = 'Enter an IPv4 address such as 192.168.1.20, with an optional port.';
+      });
+      return;
+    }
+    Navigator.of(context).pop(endpoint);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Computer address'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Type the address shown under the pairing code on the computer.',
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.done,
+            decoration: InputDecoration(
+              labelText: 'Address',
+              hintText: '192.168.1.20:47824',
+              errorText: _error,
+            ),
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Use address')),
+      ],
+    );
   }
 }

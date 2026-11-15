@@ -31,6 +31,7 @@ class _TrustedDeviceScreenState extends State<TrustedDeviceScreen> {
 
   bool _loaded = false;
   bool _discovering = false;
+  bool _discoveryDone = false;
   bool _sending = false;
   String? _sendingTo;
   String? _sendError;
@@ -88,34 +89,14 @@ class _TrustedDeviceScreenState extends State<TrustedDeviceScreen> {
     }
 
     try {
-      TrustedDevice updated;
-      try {
-        updated = await _sender.sendToTrusted(
-          device: device,
-          senderId: identity.id,
-          senderName: identity.name,
-          senderPlatform: identity.platform,
-          envelope: envelope,
-          endpoint: online?.endpoint,
-        );
-      } on TrustedTransferException {
-        if (online != null) rethrow;
-        // The remembered address may be stale. Look for the receiver's
-        // broadcast before giving up.
-        final found = await _sender.discover(
-          timeout: const Duration(seconds: 3),
-          deviceIds: {device.deviceId},
-        );
-        if (found.isEmpty) rethrow;
-        updated = await _sender.sendToTrusted(
-          device: device,
-          senderId: identity.id,
-          senderName: identity.name,
-          senderPlatform: identity.platform,
-          envelope: envelope,
-          endpoint: found.first.endpoint,
-        );
-      }
+      final updated = await _sender.sendToTrusted(
+        device: device,
+        senderId: identity.id,
+        senderName: identity.name,
+        senderPlatform: identity.platform,
+        envelope: envelope,
+        endpoint: online?.endpoint,
+      );
 
       await controller.rememberTrustedDevice(updated);
       if (!mounted) return;
@@ -148,17 +129,27 @@ class _TrustedDeviceScreenState extends State<TrustedDeviceScreen> {
     final ids = {
       for (final device in controller.trustedDevices) device.deviceId,
     };
-    if (ids.isEmpty) return;
+    if (ids.isEmpty) {
+      if (mounted) setState(() => _discoveryDone = true);
+      return;
+    }
     if (mounted) {
       setState(() {
         _discovering = true;
         _sendError = null;
       });
     }
-    final found = await _sender.discover(deviceIds: ids);
+    final found = await _sender.discover(
+      deviceIds: ids,
+      addresses: {
+        for (final device in controller.trustedDevices)
+          if (device.lastAddress != null) device.lastAddress!,
+      },
+    );
     if (!mounted) return;
     setState(() {
       _discovering = false;
+      _discoveryDone = true;
       _discovered = found;
     });
   }
@@ -285,6 +276,22 @@ class _TrustedDeviceScreenState extends State<TrustedDeviceScreen> {
                         const SizedBox(height: 12),
                       ],
                       _buildDeviceList(context, controller),
+                      if (_discoveryDone &&
+                          !_discovering &&
+                          _discovered.isEmpty &&
+                          controller.trustedDevices.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        TrustedHintCard(
+                          icon: Icons.wifi_find_rounded,
+                          title: 'No device answered on the network',
+                          body:
+                              'Keep Receive updates open on the other device and '
+                              'check that both use the same Wi-Fi. Guest Wi-Fi, '
+                              'AP isolation, a VPN and a blocked firewall rule '
+                              'all stop discovery; the remembered address is '
+                              'still tried when you tap Send.',
+                        ),
+                      ],
                       const SizedBox(height: 18),
                       TrustedHintCard(
                         icon: Icons.shield_outlined,

@@ -279,30 +279,47 @@ class LanPairingClient {
   }
 }
 
-/// Picks the best local IPv4 address for the QR code.
-Future<String?> pickLanAddress() async {
+/// Returns every local IPv4 address that could reach another device.
+///
+/// Private addresses come first because they are the ones a home or office LAN
+/// uses. Loopback and link-local addresses are excluded, and a device with
+/// several network adapters (Wi-Fi, Ethernet, a VPN) returns all of them so the
+/// user can pick the one the other device can actually reach.
+Future<List<String>> lanAddresses() async {
   try {
     final interfaces = await NetworkInterface.list(
       type: InternetAddressType.IPv4,
       includeLoopback: false,
       includeLinkLocal: false,
     );
-    final addresses = <String>[
-      for (final interface in interfaces)
-        for (final address in interface.addresses)
-          if (address.type == InternetAddressType.IPv4) address.address,
-    ];
-    if (addresses.isEmpty) return null;
-    return addresses.firstWhere(
-      _isPrivateAddress,
-      orElse: () => addresses.first,
-    );
+    final seen = <String>{};
+    final private = <String>[];
+    final other = <String>[];
+    for (final interface in interfaces) {
+      for (final address in interface.addresses) {
+        if (address.type != InternetAddressType.IPv4) continue;
+        if (!seen.add(address.address)) continue;
+        if (isPrivateIPv4(address.address)) {
+          private.add(address.address);
+        } else {
+          other.add(address.address);
+        }
+      }
+    }
+    return [...private, ...other];
   } catch (_) {
-    return null;
+    return const [];
   }
 }
 
-bool _isPrivateAddress(String address) {
+/// Picks the best local IPv4 address for the QR code.
+Future<String?> pickLanAddress() async {
+  final addresses = await lanAddresses();
+  return addresses.isEmpty ? null : addresses.first;
+}
+
+/// Whether [address] belongs to a private IPv4 range.
+bool isPrivateIPv4(String address) {
   final parts = address.split('.').map(int.tryParse).toList();
   if (parts.length != 4 || parts.any((part) => part == null)) return false;
   final first = parts[0]!;

@@ -17,8 +17,71 @@ const int kTrustedDiscoveryPort = 47823;
 ///
 /// A stable port keeps the remembered `host:port` valid between sessions, so a
 /// later transfer works even when UDP discovery is blocked. If the port is
-/// busy, the receiver falls back to an ephemeral one.
+/// busy, the receiver tries the next one in [kTrustedReceiverPorts].
 const int kTrustedReceiverPort = 47824;
+
+/// Ports tried in order before falling back to an ephemeral one.
+///
+/// Keeping the choice in a small, known range means a remembered address only
+/// has to be rediscovered when another program has taken the first port too.
+const List<int> kTrustedReceiverPorts = [
+  47824,
+  47825,
+  47826,
+  47827,
+  47828,
+  47829,
+  47830,
+];
+
+/// Multicast group used as a second discovery channel.
+///
+/// Some Wi-Fi access points pass multicast but filter the limited broadcast
+/// address, so receivers announce on both. Probes still ask for a unicast
+/// reply, which is the most reliable path on Android.
+const String kTrustedMulticastGroup = '239.255.42.99';
+
+/// Reads a manually typed `ip` or `ip:port` and returns the endpoint to call.
+///
+/// Accepts an optional `http://` prefix, a trailing slash, and `localhost`.
+/// IPv6 is rejected because the LAN pairing flow only advertises IPv4.
+Uri? parseLanEndpoint(String raw, {int defaultPort = kTrustedReceiverPort}) {
+  var text = raw.trim();
+  if (text.isEmpty) return null;
+  if (text.startsWith('http://')) text = text.substring(7);
+  if (text.startsWith('https://')) return null;
+  text = text.replaceAll(RegExp(r'/+$'), '');
+  final slash = text.indexOf('/');
+  if (slash >= 0) text = text.substring(0, slash);
+  if (text.isEmpty) return null;
+
+  var host = text;
+  var port = defaultPort;
+  final colon = text.lastIndexOf(':');
+  if (colon > 0 && colon < text.length - 1) {
+    final candidate = text.substring(colon + 1);
+    if (!candidate.contains('.')) {
+      final parsed = int.tryParse(candidate);
+      if (parsed == null || parsed <= 0 || parsed > 65535) return null;
+      host = text.substring(0, colon);
+      port = parsed;
+    }
+  }
+  if (host.startsWith('[') && host.endsWith(']')) {
+    host = host.substring(1, host.length - 1);
+  }
+
+  InternetAddress? address;
+  if (host.toLowerCase() == 'localhost') {
+    address = InternetAddress.loopbackIPv4;
+  } else {
+    address = InternetAddress.tryParse(host);
+  }
+  if (address == null || address.type != InternetAddressType.IPv4) {
+    return null;
+  }
+  return Uri.parse('http://${address.address}:$port');
+}
 
 /// A trusted device seen on the local network.
 class DiscoveredTrustedDevice {
@@ -41,9 +104,16 @@ class DiscoveredTrustedDevice {
 
 /// Raised when a trusted transfer cannot be started, reached or completed.
 class TrustedTransferException implements Exception {
-  const TrustedTransferException(this.message);
+  const TrustedTransferException(this.message, {this.retryable = false});
 
   final String message;
+
+  /// Whether trying another address could succeed.
+  ///
+  /// A refused transfer, a wrong device or an expired code is final. Only a
+  /// timeout or an unreachable address is worth retrying, and retrying those
+  /// must never make the receiving device ask its user a second time.
+  final bool retryable;
 
   @override
   String toString() => message;
@@ -148,7 +218,9 @@ class TrustedPairingReceiver {
   }) async {
     await stop();
 
-    final address = addressOverride ?? await pickLanAddress();
+    final addresses = await lanAddresses();
+    final address =
+        addressOverride ?? (addresses.isEmpty ? null : addresses.first);
     if (address == null) {
       throw const TrustedTransferException(
         'No local network address was found. Connect this device to Wi-Fi or '
@@ -182,6 +254,13 @@ class TrustedPairingReceiver {
     _pushTokens.clear();
     _failures.clear();
 
+    final visibleAddresses = <String>[
+      if (addressOverride == null) ...addresses else address,
+    ];
+    if (!visibleAddresses.contains(address)) {
+      visibleAddresses.insert(0, address);
+    }
+
     _offer = TrustPairingOffer(
       link: TrustPairingLink(
         endpoint: Uri.parse('http://$address:${server.port}'),
@@ -194,6 +273,7 @@ class TrustedPairingReceiver {
         expiresAt: expiresAt,
       ),
       address: address,
+      addresses: visibleAddresses,
       expiresAt: expiresAt,
     );
 
@@ -212,57 +292,111 @@ class TrustedPairingReceiver {
     if (requestedPort != null) {
       return HttpServer.bind(address, requestedPort);
     }
-    try {
-      return await HttpServer.bind(address, kTrustedReceiverPort);
-    } on SocketException {
-      return HttpServer.bind(address, 0);
+    for (final candidate in kTrustedReceiverPorts) {
+      try {
+        return await HttpServer.bind(address, candidate);
+      } on SocketException {
+        // Another program owns this port; try the next stable one.
+      }
     }
+    return HttpServer.bind(address, 0);
   }
 
   Future<void> _startBeacon(int discoveryPort, int serverPort) async {
+    RawDatagramSocket? socket;
     try {
-      final socket = await RawDatagramSocket.bind(
+      socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         discoveryPort,
         reuseAddress: true,
       );
-      socket.broadcastEnabled = true;
-      _beacon = socket;
-
-      void announce() {
-        final offer = _offer;
-        if (offer == null) return;
-        final payload = utf8.encode(
-          jsonEncode({
-            'app': 'SecureID',
-            'version': 1,
-            'id': _deviceId,
-            'name': _deviceName,
-            'platform': _devicePlatform,
-            'port': serverPort,
-            'pairing': !_used,
-          }),
-        );
-        try {
-          socket.send(
-            payload,
-            InternetAddress('255.255.255.255'),
-            discoveryPort,
-          );
-        } catch (_) {
-          // Some networks block broadcast; the QR and last address still work.
-        }
-      }
-
-      announce();
-      _beaconTimer = Timer.periodic(
-        const Duration(seconds: 1),
-        (_) => announce(),
-      );
     } catch (_) {
       // Discovery is best-effort. Pairing by QR and the remembered address
-      // still work when UDP broadcast is unavailable.
+      // still work when UDP is unavailable.
+      return;
     }
+
+    try {
+      socket.broadcastEnabled = true;
+      socket.multicastLoopback = true;
+    } catch (_) {
+      // Some platforms refuse one of these flags; broadcast still works.
+    }
+    _beacon = socket;
+
+    final targets = await _announceTargets();
+    List<int> payload() => utf8.encode(jsonEncode(_announcement(serverPort)));
+
+    void sendTo(List<int> bytes, InternetAddress target) {
+      try {
+        socket?.send(bytes, target, discoveryPort);
+      } catch (_) {
+        // A blocked interface or a VPN route can reject a single target.
+      }
+    }
+
+    void announce() {
+      final bytes = payload();
+      for (final target in targets) {
+        sendTo(bytes, target);
+      }
+    }
+
+    socket.listen((event) {
+      if (event != RawSocketEvent.read) return;
+      final datagram = socket?.receive();
+      if (datagram == null) return;
+      Map<String, dynamic>? decoded;
+      try {
+        final value = jsonDecode(utf8.decode(datagram.data));
+        if (value is Map<String, dynamic>) decoded = value;
+      } catch (_) {
+        return;
+      }
+      if (decoded == null || decoded['app'] != 'SecureID') return;
+      if (decoded['kind'] != 'probe') return;
+      // Answer the probe directly. Unicast survives networks that drop the
+      // broadcast address, and it is the path Android usually allows.
+      try {
+        socket?.send(payload(), datagram.address, datagram.port);
+      } catch (_) {
+        // The probe came from an address this device cannot route back to.
+      }
+    }, onError: (Object _) {});
+
+    announce();
+    _beaconTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => announce(),
+    );
+  }
+
+  Map<String, dynamic> _announcement(int serverPort) => {
+    'app': 'SecureID',
+    'version': 2,
+    'kind': 'announce',
+    'id': _deviceId,
+    'name': _deviceName,
+    'platform': _devicePlatform,
+    'port': serverPort,
+    'pairing': !_used,
+  };
+
+  Future<List<InternetAddress>> _announceTargets() async {
+    final targets = <String>{
+      '255.255.255.255',
+      kTrustedMulticastGroup,
+      for (final address in await lanAddresses()) _subnetBroadcast(address),
+    };
+    targets.removeWhere((target) => target.isEmpty);
+    return [for (final target in targets) InternetAddress(target)];
+  }
+
+  /// Approximates the directed broadcast address of a /24 subnet.
+  String _subnetBroadcast(String address) {
+    final parts = address.split('.');
+    if (parts.length != 4) return '';
+    return '${parts[0]}.${parts[1]}.${parts[2]}.255';
   }
 
   Future<void> stop() async {
@@ -862,7 +996,7 @@ class TrustedPairingSender {
       'senderPlatform': senderPlatform,
       'publicKey': encodeBytes(publicKey.bytes),
       'proof': encodeBytes(pairProof),
-    });
+    }, attempts: 3);
 
     final receiverId = pairResponse['receiverId'] as String? ?? '';
     final receiverName = (pairResponse['receiverName'] as String? ?? '').trim();
@@ -914,6 +1048,10 @@ class TrustedPairingSender {
   }
 
   /// Pushes to an already paired device after a challenge-response check.
+  ///
+  /// The remembered address is tried first. If it is stale, the receiver is
+  /// found again over UDP and the transfer is retried there, so a device that
+  /// moved to a new DHCP address does not need a new pairing code.
   Future<TrustedDevice> sendToTrusted({
     required TrustedDevice device,
     required String senderId,
@@ -921,24 +1059,81 @@ class TrustedPairingSender {
     required String senderPlatform,
     required String envelope,
     Uri? endpoint,
+    bool rediscover = true,
   }) async {
     if (!_looksLikeVault(envelope)) {
       throw const TrustedTransferException('There is no vault to send yet.');
     }
 
-    final target = endpoint ?? _endpointFor(device);
-    if (target == null) {
-      throw const TrustedTransferException(
-        'The other device has not been seen yet. Open Receive on it, then try '
-        'again.',
-      );
+    final remembered = _endpointFor(device);
+    final attempts = <Uri>[?endpoint, ?remembered];
+
+    TrustedTransferException? lastError;
+    for (final target in attempts) {
+      try {
+        return await _sendToEndpoint(
+          device: device,
+          target: target,
+          senderId: senderId,
+          senderName: senderName,
+          senderPlatform: senderPlatform,
+          envelope: envelope,
+        );
+      } on TrustedTransferException catch (error) {
+        lastError = error;
+        // A refusal, a wrong device or an expired code will not change if the
+        // receiver is found again. Only unreachable addresses are retried.
+        if (!error.retryable) rethrow;
+      }
     }
 
+    if (!rediscover) {
+      throw lastError ??
+          const TrustedTransferException(
+            'The other device has not been seen yet. Open Receive on it, then '
+            'try again.',
+          );
+    }
+
+    final found = await discover(
+      timeout: const Duration(seconds: 3),
+      deviceIds: {device.deviceId},
+      addresses: {
+        if (device.lastAddress != null) device.lastAddress!,
+        if (endpoint != null) endpoint.authority,
+      },
+    );
+    if (found.isEmpty) {
+      throw lastError ??
+          const TrustedTransferException(
+            'The other device has not been seen yet. Open Receive on it, then '
+            'try again.',
+          );
+    }
+
+    return _sendToEndpoint(
+      device: device,
+      target: found.first.endpoint,
+      senderId: senderId,
+      senderName: senderName,
+      senderPlatform: senderPlatform,
+      envelope: envelope,
+    );
+  }
+
+  Future<TrustedDevice> _sendToEndpoint({
+    required TrustedDevice device,
+    required Uri target,
+    required String senderId,
+    required String senderName,
+    required String senderPlatform,
+    required String envelope,
+  }) async {
     final senderNonce = newId(16);
     final hello = await _postJson(target.replace(path: '/trusted/hello'), {
       'senderId': senderId,
       'senderNonce': senderNonce,
-    });
+    }, attempts: 3);
     final receiverId = hello['receiverId'] as String? ?? '';
     final receiverNonce = hello['receiverNonce'] as String? ?? '';
     if (receiverId.isEmpty || receiverId != device.deviceId) {
@@ -980,60 +1175,187 @@ class TrustedPairingSender {
     );
   }
 
-  /// Listens for receiving devices on the LAN for [timeout].
+  /// Finds receiving devices on the LAN.
+  ///
+  /// A probe is sent to the limited broadcast address, each local /24 directed
+  /// broadcast, the multicast group, and any [addresses] the caller already
+  /// knows. Receivers answer each probe with a unicast announcement, which
+  /// arrives on an ephemeral socket and survives networks that filter
+  /// broadcast traffic. A second socket listens for ordinary announcements.
   Future<List<DiscoveredTrustedDevice>> discover({
     Duration timeout = const Duration(seconds: 3),
     Set<String>? deviceIds,
+    Set<String>? addresses,
   }) async {
-    RawDatagramSocket? socket;
-    try {
-      socket = await RawDatagramSocket.bind(
-        InternetAddress.anyIPv4,
-        discoveryPort,
-        reuseAddress: true,
-      );
-      final found = <String, DiscoveredTrustedDevice>{};
-      final done = Completer<void>();
+    final found = <String, DiscoveredTrustedDevice>{};
+    final sockets = <RawDatagramSocket>[];
+    final done = Completer<void>();
 
+    void finish() {
+      if (!done.isCompleted) done.complete();
+    }
+
+    bool completeIfDone() {
+      if (done.isCompleted) return true;
+      final wanted = deviceIds;
+      if (wanted != null && wanted.isNotEmpty) {
+        if (!wanted.every(found.containsKey)) return false;
+        finish();
+        return true;
+      }
+      return false;
+    }
+
+    void record(RawDatagramSocket socket) {
+      final datagram = socket.receive();
+      if (datagram == null) return;
+      try {
+        final decoded = jsonDecode(utf8.decode(datagram.data));
+        if (decoded is! Map<String, dynamic>) return;
+        if (decoded['app'] != 'SecureID') return;
+        final kind = decoded['kind'] as String? ?? 'announce';
+        if (kind != 'announce' && kind != 'response') return;
+        final id = decoded['id'] as String? ?? '';
+        final port = (decoded['port'] as num?)?.toInt() ?? 0;
+        if (id.isEmpty || port <= 0) return;
+        if (deviceIds != null &&
+            deviceIds.isNotEmpty &&
+            !deviceIds.contains(id)) {
+          return;
+        }
+        found[id] = DiscoveredTrustedDevice(
+          deviceId: id,
+          name: decoded['name'] as String? ?? 'SecureID device',
+          platform: decoded['platform'] as String? ?? 'unknown',
+          address: datagram.address.address,
+          port: port,
+        );
+        completeIfDone();
+      } catch (_) {
+        // Ignore unrelated broadcast traffic.
+      }
+    }
+
+    void listen(RawDatagramSocket socket) {
       socket.listen(
         (event) {
           if (event != RawSocketEvent.read) return;
-          final datagram = socket?.receive();
-          if (datagram == null) return;
-          try {
-            final decoded = jsonDecode(utf8.decode(datagram.data));
-            if (decoded is! Map<String, dynamic>) return;
-            if (decoded['app'] != 'SecureID') return;
-            final id = decoded['id'] as String? ?? '';
-            final port = (decoded['port'] as num?)?.toInt() ?? 0;
-            if (id.isEmpty || port <= 0) return;
-            if (deviceIds != null && !deviceIds.contains(id)) return;
-            found[id] = DiscoveredTrustedDevice(
-              deviceId: id,
-              name: decoded['name'] as String? ?? 'SecureID device',
-              platform: decoded['platform'] as String? ?? 'unknown',
-              address: datagram.address.address,
-              port: port,
-            );
-          } catch (_) {
-            // Ignore unrelated broadcast traffic.
-          }
+          record(socket);
         },
-        onDone: () {
-          if (!done.isCompleted) done.complete();
-        },
-        onError: (Object _) {
-          if (!done.isCompleted) done.complete();
-        },
+        onDone: finish,
+        onError: (Object _) => finish(),
       );
+    }
 
+    try {
+      // The ephemeral socket receives the unicast answers to our probes.
+      try {
+        final unicast = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          0,
+          reuseAddress: true,
+        );
+        unicast.broadcastEnabled = true;
+        sockets.add(unicast);
+        listen(unicast);
+      } catch (_) {
+        // Keep going with the announcement socket below.
+      }
+
+      // The discovery port receives broadcasts and multicast announcements.
+      try {
+        final announcements = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          discoveryPort,
+          reuseAddress: true,
+        );
+        announcements.broadcastEnabled = true;
+        try {
+          announcements.joinMulticast(InternetAddress(kTrustedMulticastGroup));
+        } catch (_) {
+          // Multicast is a bonus; broadcast and probes still work.
+        }
+        sockets.add(announcements);
+        listen(announcements);
+      } catch (_) {
+        // Another process may own the port; probes still get answers.
+      }
+
+      if (sockets.isEmpty) return const [];
+
+      final probe = utf8.encode(
+        jsonEncode({'app': 'SecureID', 'version': 2, 'kind': 'probe'}),
+      );
+      final unicastHosts = <String>{
+        for (final raw in addresses ?? const <String>{})
+          if (_hostOf(raw) case final host when host.isNotEmpty) host,
+      };
+      final targets = await _probeTargets();
+
+      void probeOnce() {
+        for (final socket in sockets) {
+          for (final target in targets) {
+            try {
+              socket.send(probe, target, discoveryPort);
+            } catch (_) {
+              // This interface may be down or routed elsewhere.
+            }
+          }
+          for (final host in unicastHosts) {
+            try {
+              socket.send(probe, InternetAddress(host), discoveryPort);
+            } catch (_) {
+              // The remembered address is no longer on this network.
+            }
+          }
+        }
+      }
+
+      probeOnce();
+      final timer = Timer.periodic(
+        const Duration(milliseconds: 700),
+        (_) => probeOnce(),
+      );
       await Future.any([done.future, Future<void>.delayed(timeout)]);
+      timer.cancel();
       return found.values.toList(growable: false);
     } catch (_) {
       return const [];
     } finally {
-      socket?.close();
+      for (final socket in sockets) {
+        socket.close();
+      }
     }
+  }
+
+  Future<List<InternetAddress>> _probeTargets() async {
+    final targets = <String>{
+      '255.255.255.255',
+      kTrustedMulticastGroup,
+      for (final address in await lanAddresses()) _subnetBroadcast(address),
+    };
+    targets.removeWhere((target) => target.isEmpty);
+    return [for (final target in targets) InternetAddress(target)];
+  }
+
+  String _subnetBroadcast(String address) {
+    final parts = address.split('.');
+    if (parts.length != 4) return '';
+    return '${parts[0]}.${parts[1]}.${parts[2]}.255';
+  }
+
+  String _hostOf(String address) {
+    var text = address.trim();
+    if (text.isEmpty) return '';
+    if (text.startsWith('http://')) text = text.substring(7);
+    final slash = text.indexOf('/');
+    if (slash >= 0) text = text.substring(0, slash);
+    final colon = text.lastIndexOf(':');
+    if (colon > 0) text = text.substring(0, colon);
+    if (text.startsWith('[') && text.endsWith(']')) {
+      text = text.substring(1, text.length - 1);
+    }
+    return text;
   }
 
   Uri? _endpointFor(TrustedDevice device) {
@@ -1058,50 +1380,71 @@ class TrustedPairingSender {
     Uri uri,
     Map<String, dynamic> body, {
     Duration? responseTimeout,
+    int attempts = 1,
   }) async {
     final wait = responseTimeout ?? timeout;
-    final client = HttpClient()..connectionTimeout = timeout;
-    try {
-      final request = await client.postUrl(uri).timeout(timeout);
-      request.headers.contentType = ContentType.json;
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.write(jsonEncode(body));
-      final response = await request.close().timeout(wait);
-      final text = await response.transform(utf8.decoder).join().timeout(wait);
+    var attempt = 0;
+    while (true) {
+      attempt++;
+      final client = HttpClient()..connectionTimeout = timeout;
+      try {
+        final request = await client.postUrl(uri).timeout(timeout);
+        request.headers.contentType = ContentType.json;
+        request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+        request.write(jsonEncode(body));
+        final response = await request.close().timeout(wait);
+        final text = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(wait);
 
-      Map<String, dynamic> json = const {};
-      if (text.trim().isNotEmpty) {
-        try {
-          final decoded = jsonDecode(text);
-          if (decoded is Map<String, dynamic>) json = decoded;
-        } on FormatException {
-          // The status code below decides whether that matters.
+        Map<String, dynamic> json = const {};
+        if (text.trim().isNotEmpty) {
+          try {
+            final decoded = jsonDecode(text);
+            if (decoded is Map<String, dynamic>) json = decoded;
+          } on FormatException {
+            // The status code below decides whether that matters.
+          }
         }
-      }
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw TrustedTransferException(
-          json['error'] as String? ??
-              'The other device refused the transfer '
-                  '(${response.statusCode}).',
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw TrustedTransferException(
+            json['error'] as String? ??
+                'The other device refused the transfer '
+                    '(${response.statusCode}).',
+          );
+        }
+        return json;
+      } on TrustedTransferException {
+        rethrow;
+      } on TimeoutException {
+        if (attempt < attempts) {
+          await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
+          continue;
+        }
+        throw const TrustedTransferException(
+          'The other device did not respond. Make sure both devices are on the '
+          'same Wi-Fi and try again.',
+          retryable: true,
         );
+      } on SocketException {
+        if (attempt < attempts) {
+          await Future<void>.delayed(Duration(milliseconds: 200 * attempt));
+          continue;
+        }
+        throw const TrustedTransferException(
+          'Could not reach the other device. Check that both devices are on the '
+          'same Wi-Fi and that the firewall allows the connection.',
+          retryable: true,
+        );
+      } catch (error) {
+        throw TrustedTransferException(
+          'Could not finish the transfer: $error',
+          retryable: true,
+        );
+      } finally {
+        client.close(force: true);
       }
-      return json;
-    } on TrustedTransferException {
-      rethrow;
-    } on TimeoutException {
-      throw const TrustedTransferException(
-        'The other device did not respond. Make sure both devices are on the '
-        'same Wi-Fi and try again.',
-      );
-    } on SocketException {
-      throw const TrustedTransferException(
-        'Could not reach the other device. Check that both devices are on the '
-        'same Wi-Fi and that the firewall allows the connection.',
-      );
-    } catch (error) {
-      throw TrustedTransferException('Could not finish the transfer: $error');
-    } finally {
-      client.close(force: true);
     }
   }
 }

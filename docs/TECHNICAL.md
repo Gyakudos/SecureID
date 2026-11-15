@@ -244,9 +244,11 @@ the pairing flow are separate screens, so adding a phone never removes the
 devices already trusted.
 
 1. On the PC, open **Settings → Linked devices → Pair a new Device**. The PC
-   shows a QR code and a six-digit code.
+   shows a QR code, a six-digit code and a copy button.
 2. On the phone, open **Trusted Devices → Pair a new Device** and scan the
-   code. Check that the six digits match the PC screen, then confirm.
+   code. If the camera cannot read it, tap **Paste a code instead** and paste
+   the copied link. Check that the six digits match the PC screen, then
+   confirm.
 3. The phone sends the encrypted envelope in the same scan. The PC asks once
    before pairing and replacing an existing vault.
 
@@ -265,11 +267,20 @@ stale key record but keeps the platform device key and the login preferences;
 on Windows the record is recreated silently after the next master-password
 unlock, and Android asks for a biometric confirmation before re-enabling it.
 
-Both devices must be on the same Wi-Fi or LAN. The receiver prefers TCP port
-`47824` and announces itself over UDP port `47823`; if the port is busy it
-falls back to an ephemeral one, and discovery corrects the remembered address.
-If discovery is blocked, the last known stable address is used. Allow the app
-through the Windows firewall if prompted.
+Both devices must be on the same Wi-Fi or LAN. The receiver prefers TCP ports
+`47824` through `47830` and keeps the first free one, so a remembered address
+stays valid; only when all of them are busy does it use an ephemeral port.
+Announcements go to the limited broadcast address, each local `/24` directed
+broadcast and the `239.255.42.99` multicast group over UDP port `47823`.
+Senders also send a discovery probe to those targets and to remembered
+addresses; receivers answer each probe with a unicast announcement, which
+still works when a network filters broadcast. The screen lists every local
+`host:port`, and a phone that scanned a QR code with the wrong adapter (a VPN
+or second Ethernet port) can tap **Try a different computer address** and type
+the Wi-Fi address shown on the PC. If discovery is blocked, the last known
+address is used. Allow the app through the Windows firewall if prompted, and
+turn off guest Wi-Fi, AP isolation or a VPN if the devices cannot see each
+other.
 
 Pairing uses X25519, with the shared secret mixed through HKDF-SHA256 with a
 random 32-byte pairing secret that travels only inside the QR code. Both sides
@@ -356,8 +367,9 @@ Windows Hello, Android biometrics, PIN/pattern quick unlock, default login and
 backup restore), account sign-in, upload/download sync, conflict detection and
 resolution, accessibility preferences and spoken summaries, trusted-device
 pairing, sealed trust-store persistence, trusted transfer/replay rejection,
-CSV format detection and quoting, Chromium password decryption and direct
-database import, import duplicate handling, and the setup/unlock widget flows.
+LAN probe discovery, stable-port fallback and typed-address parsing, CSV format
+detection and quoting, Chromium password decryption and direct database import,
+import duplicate handling, and the setup/unlock widget flows.
 
 ## Limitations
 

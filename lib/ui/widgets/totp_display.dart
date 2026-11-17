@@ -64,7 +64,7 @@ class _TotpCodeViewState extends State<TotpCodeView> {
     final codeColor = expiring ? kDanger : scheme.onSurface;
     final ringColor = expiring ? kDanger : kMint;
 
-    return Row(
+    final row = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
@@ -106,20 +106,22 @@ class _TotpCodeViewState extends State<TotpCodeView> {
             ],
           ),
         ),
-        if (widget.onCopy != null) ...[
-          const SizedBox(width: 2),
-          IconButton(
-            visualDensity: VisualDensity.compact,
-            tooltip: 'Copy code',
-            onPressed: widget.onCopy,
-            icon: Icon(
-              Icons.copy_rounded,
-              size: widget.compact ? 16 : 18,
-              color: scheme.onSurfaceVariant,
-            ),
-          ),
-        ],
       ],
+    );
+
+    if (widget.onCopy == null) return row;
+
+    // The code itself is the copy target, so there is no separate copy icon.
+    return Tooltip(
+      message: 'Copy code',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: widget.onCopy,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+          child: row,
+        ),
+      ),
     );
   }
 }

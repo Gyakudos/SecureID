@@ -189,7 +189,6 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
                       label: 'Notes',
                       value: item.notes,
                       icon: Icons.notes_rounded,
-                      multiline: true,
                     ),
                 ],
                 if (item.isPasskey && item.passkey != null) ...[
@@ -197,11 +196,25 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
                     label: 'Relying party',
                     value: item.passkey!.relyingPartyId,
                     icon: Icons.language_rounded,
+                    onCopy: item.passkey!.relyingPartyId.trim().isEmpty
+                        ? null
+                        : () => _copy(
+                            item.passkey!.relyingPartyId,
+                            'Relying party',
+                            seconds,
+                          ),
                   ),
                   _DetailRow(
                     label: 'Account',
                     value: item.passkey!.accountName,
                     icon: Icons.person_outline_rounded,
+                    onCopy: item.passkey!.accountName.trim().isEmpty
+                        ? null
+                        : () => _copy(
+                            item.passkey!.accountName,
+                            'Account',
+                            seconds,
+                          ),
                   ),
                   _DetailRow(
                     label: 'Credential ID',
@@ -215,19 +228,61 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
                     ),
                   ),
                   _DetailRow(
+                    label: 'User handle',
+                    value: item.passkey!.userHandle,
+                    icon: Icons.badge_outlined,
+                    monospace: true,
+                    onCopy: () =>
+                        _copy(item.passkey!.userHandle, 'User handle', seconds),
+                  ),
+                  _DetailRow(
+                    label: 'Public key (COSE)',
+                    value: item.passkey!.publicKeyCose,
+                    icon: Icons.vpn_key_rounded,
+                    monospace: true,
+                    onCopy: () => _copy(
+                      item.passkey!.publicKeyCose,
+                      'Public key',
+                      seconds,
+                    ),
+                  ),
+                  _DetailRow(
                     label: 'Algorithm',
                     value: item.passkey!.algorithmLabel,
                     icon: Icons.functions_rounded,
+                    onCopy: () => _copy(
+                      item.passkey!.algorithmLabel,
+                      'Algorithm',
+                      seconds,
+                    ),
                   ),
                   _DetailRow(
                     label: 'Signature counter',
                     value: item.passkey!.signCount.toString(),
                     icon: Icons.numbers_rounded,
+                    onCopy: () => _copy(
+                      item.passkey!.signCount.toString(),
+                      'Signature counter',
+                      seconds,
+                    ),
                   ),
                   _DetailRow(
                     label: 'Discoverable',
                     value: item.passkey!.discoverable ? 'Yes' : 'No',
                     icon: Icons.key_rounded,
+                    onCopy: () => _copy(
+                      item.passkey!.discoverable ? 'Yes' : 'No',
+                      'Discoverable',
+                      seconds,
+                    ),
+                  ),
+                  _DetailRow(
+                    label: 'AAGUID',
+                    value: item.passkey!.aaguid,
+                    icon: Icons.memory_rounded,
+                    monospace: true,
+                    onCopy: () =>
+                        _copy(item.passkey!.aaguid, 'AAGUID', seconds),
                   ),
                 ],
                 if (item.hasTotp) ...[
@@ -327,21 +382,70 @@ class _TotpDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TotpCodeView(data: data, onCopy: onCopy),
+    final label = data.displayLabel;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Semantics(
+        label: 'One-time code. Tap to copy.',
+        button: true,
+        child: Material(
+          color: scheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(18),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(18),
+            onTap: onCopy,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.shield_moon_rounded,
+                        size: 18,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'ONE-TIME CODE',
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      _BlockAction(
+                        label: 'Copy',
+                        accent: true,
+                        onPressed: onCopy,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TotpCodeView(data: data, onCopy: onCopy),
+                  if (label.trim().isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-          const Icon(Icons.shield_moon_rounded, color: kMint, size: 22),
-        ],
+        ),
       ),
     );
   }
@@ -356,7 +460,6 @@ class _DetailRow extends StatelessWidget {
     this.onReveal,
     this.obscured = false,
     this.monospace = false,
-    this.multiline = false,
   });
 
   final String label;
@@ -366,74 +469,131 @@ class _DetailRow extends StatelessWidget {
   final VoidCallback? onReveal;
   final bool obscured;
   final bool monospace;
-  final bool multiline;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     if (value.trim().isEmpty) return const SizedBox.shrink();
     final display = obscured ? '•' * value.length.clamp(6, 28) : value;
+    final copyable = onCopy != null;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    final body = Container(
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: scheme.outlineVariant),
       ),
-      child: Row(
-        crossAxisAlignment: multiline
-            ? CrossAxisAlignment.start
-            : CrossAxisAlignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
+          Row(
+            children: [
+              Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label.toUpperCase(),
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.4,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
                   ),
                 ),
-                const SizedBox(height: 3),
-                SelectableText(
-                  display,
-                  style: TextStyle(
-                    fontFamily: monospace ? 'monospace' : null,
-                    fontSize: monospace ? 12.5 : 14,
-                    height: 1.4,
-                  ),
+              ),
+              if (onReveal != null)
+                _BlockAction(
+                  label: obscured ? 'Show' : 'Hide',
+                  onPressed: onReveal!,
                 ),
-              ],
-            ),
+              if (copyable)
+                _BlockAction(label: 'Copy', accent: true, onPressed: onCopy!),
+            ],
           ),
-          if (onReveal != null)
-            IconButton(
-              tooltip: obscured ? 'Reveal' : 'Hide',
-              visualDensity: VisualDensity.compact,
-              onPressed: onReveal,
-              icon: Icon(
-                obscured
-                    ? Icons.visibility_off_rounded
-                    : Icons.visibility_rounded,
-                size: 18,
+          const SizedBox(height: 4),
+          Padding(
+            padding: const EdgeInsets.only(left: 30),
+            child: copyable
+                ? Text(
+                    display,
+                    style: TextStyle(
+                      fontFamily: monospace ? 'monospace' : null,
+                      fontSize: monospace ? 12.5 : 14,
+                      height: 1.4,
+                    ),
+                  )
+                : SelectableText(
+                    display,
+                    style: TextStyle(
+                      fontFamily: monospace ? 'monospace' : null,
+                      fontSize: monospace ? 12.5 : 14,
+                      height: 1.4,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Semantics(
+        label: copyable ? '$label. Tap to copy.' : label,
+        button: copyable,
+        child: Material(
+          color: scheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: onCopy,
+            child: body,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small pill-shaped text action inside a copy block.
+///
+/// Text instead of an icon keeps the target large and the label explicit, so
+/// the whole block reads as a button rather than a row with a tiny icon.
+class _BlockAction extends StatelessWidget {
+  const _BlockAction({
+    required this.label,
+    required this.onPressed,
+    this.accent = false,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final bool accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = accent ? scheme.secondary : scheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: Material(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: onPressed,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.4,
               ),
             ),
-          if (onCopy != null)
-            IconButton(
-              tooltip: 'Copy',
-              visualDensity: VisualDensity.compact,
-              onPressed: onCopy,
-              icon: const Icon(Icons.copy_rounded, size: 18),
-            ),
-        ],
+          ),
+        ),
       ),
     );
   }

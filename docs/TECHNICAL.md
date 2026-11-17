@@ -14,6 +14,10 @@ exported earlier.
 
 - **Logins** — title, username, password, website, notes and tags, plus an
   optional **2FA** secret shown inline on the login card.
+- **Tap-to-copy blocks** — every value in an item opens as a labelled block:
+  Username, Password, Website, the live 2FA code and each passkey field. Tap the
+  block (or its Copy pill) to copy that value; the clipboard clears after the
+  configured delay. Passwords stay hidden until **Show** is tapped.
 - **Passkeys** — relying party, account, credential ID, user handle, COSE
   public key, algorithm, signature counter, AAGUID and discoverability.
 - **Authenticator** — live 6–8 digit TOTP codes with a countdown ring.
@@ -367,9 +371,10 @@ Windows Hello, Android biometrics, PIN/pattern quick unlock, default login and
 backup restore), account sign-in, upload/download sync, conflict detection and
 resolution, accessibility preferences and spoken summaries, trusted-device
 pairing, sealed trust-store persistence, trusted transfer/replay rejection,
-LAN probe discovery, stable-port fallback and typed-address parsing, CSV format
-detection and quoting, Chromium password decryption and direct database import,
-import duplicate handling, and the setup/unlock widget flows.
+LAN probe discovery, stable-port fallback and typed-address parsing, tap-to-copy
+item blocks, CSV format detection and quoting, Chromium password decryption and
+direct database import, import duplicate handling, and the setup/unlock widget
+flows.
 
 ## Limitations
 

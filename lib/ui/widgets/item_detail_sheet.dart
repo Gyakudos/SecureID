@@ -304,7 +304,6 @@ class _ItemDetailSheetState extends State<ItemDetailSheet> {
                     obscured: !_revealSecret,
                     onReveal: () =>
                         setState(() => _revealSecret = !_revealSecret),
-                    onCopy: () => _copy(item.totp!.secret, 'Secret', seconds),
                   ),
                   _DetailRow(
                     label: 'Algorithm',

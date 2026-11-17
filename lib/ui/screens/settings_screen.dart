@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/device_login.dart';
 import '../../models/vault_settings.dart';
+import '../../security/vault_audit.dart';
 import '../../state/vault_controller.dart';
 import '../../state/vault_scope.dart';
 import '../../util/date_format.dart';
@@ -18,6 +19,7 @@ import 'account_screen.dart';
 import 'import_screen.dart';
 import 'link_phone_screen.dart';
 import 'pair_device_screen.dart';
+import 'security_check_screen.dart';
 import 'trusted_device_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -187,6 +189,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final controller = VaultScope.of(context);
     final scheme = Theme.of(context).colorScheme;
     final settings = controller.settings;
+    final audit = auditVault(controller.items);
 
     return Scaffold(
       body: GradientBackground(
@@ -426,6 +429,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             title: 'Security',
                             icon: Icons.shield_outlined,
                             children: [
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(
+                                  Icons.health_and_safety_outlined,
+                                ),
+                                title: const Text('Security check'),
+                                subtitle: Text(
+                                  audit.logins == 0
+                                      ? 'Check weak, reused and missing '
+                                            'passwords offline'
+                                      : audit.isClean
+                                      ? 'No issues found across '
+                                            '${audit.logins} '
+                                            '${audit.logins == 1 ? 'login' : 'logins'}'
+                                      : 'Score ${audit.score} · '
+                                            '${audit.findings.length} '
+                                            '${audit.findings.length == 1 ? 'issue' : 'issues'} '
+                                            'across ${audit.logins} '
+                                            '${audit.logins == 1 ? 'login' : 'logins'}',
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right_rounded,
+                                ),
+                                onTap: () => Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => const SecurityCheckScreen(),
+                                  ),
+                                ),
+                              ),
+                              const Divider(height: 1),
                               _DropdownTile<int>(
                                 icon: Icons.timer_outlined,
                                 title: 'Auto-lock',

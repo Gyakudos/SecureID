@@ -27,6 +27,9 @@ exported earlier.
   - SHA-1, SHA-256 and SHA-512, with 30 s or 60 s periods.
 - **Password generator** — length, character classes and ambiguous-character
   exclusion, with a strength estimate.
+- **Security check** — an offline audit of every login for missing, weak and
+  reused passwords and for logins without a 2FA code. Each finding opens the
+  item, and the report never leaves the device.
 - **Search and filters** — all items, logins, passkeys, 2FA codes and
   favorites.
 - **Auto-lock** — after inactivity and/or when the app is backgrounded.
@@ -372,9 +375,9 @@ backup restore), account sign-in, upload/download sync, conflict detection and
 resolution, accessibility preferences and spoken summaries, trusted-device
 pairing, sealed trust-store persistence, trusted transfer/replay rejection,
 LAN probe discovery, stable-port fallback and typed-address parsing, tap-to-copy
-item blocks, CSV format detection and quoting, Chromium password decryption and
-direct database import, import duplicate handling, and the setup/unlock widget
-flows.
+item blocks, the offline security audit, CSV format detection and quoting,
+Chromium password decryption and direct database import, import duplicate
+handling, and the setup/unlock widget flows.
 
 ## Limitations
 
